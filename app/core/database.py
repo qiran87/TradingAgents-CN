@@ -362,6 +362,25 @@ async def create_database_indexes(db):
         await market_quotes.create_index([("amount", -1)])
         await market_quotes.create_index([("updated_at", -1)])
 
+        # 回测引擎相关集合的索引
+        # backtest_tasks 集合
+        backtest_tasks = db["backtest_tasks"]
+        await backtest_tasks.create_index([("backtest_id", 1)], unique=True)
+        await backtest_tasks.create_index([("user_id", 1)])
+        await backtest_tasks.create_index([("status", 1)])
+        await backtest_tasks.create_index([("created_at", -1)])
+
+        # backtest_trades 集合
+        backtest_trades = db["backtest_trades"]
+        await backtest_trades.create_index([("backtest_id", 1), ("date", 1)])
+        await backtest_trades.create_index([("backtest_id", 1)])
+        await backtest_trades.create_index([("trade_type", 1)])
+
+        # backtest_daily_states 集合
+        backtest_daily_states = db["backtest_daily_states"]
+        await backtest_daily_states.create_index([("backtest_id", 1), ("date", 1)], unique=True)
+        await backtest_daily_states.create_index([("backtest_id", 1)])
+
         logger.info("✅ 数据库索引创建完成")
 
     except Exception as e:
