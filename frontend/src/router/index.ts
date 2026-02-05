@@ -203,6 +203,28 @@ const routes: RouteRecordRaw[] = [
   { path: '/queue', redirect: '/tasks' },
   { path: '/analysis/history', redirect: '/tasks?tab=completed' },
   {
+    path: '/backtest',
+    name: 'Backtest',
+    component: () => import('@/layouts/BasicLayout.vue'),
+    meta: {
+      title: '回测管理',
+      icon: 'TrendCharts',
+      requiresAuth: true,
+      transition: 'slide-up'
+    },
+    children: [
+      {
+        path: 'strategies',
+        name: 'BacktestStrategies',
+        component: () => import('@/views/Backtest/StrategyList.vue'),
+        meta: {
+          title: '策略管理',
+          requiresAuth: true
+        }
+      }
+    ]
+  },
+  {
     path: '/reports',
     name: 'Reports',
     component: () => import('@/layouts/BasicLayout.vue'),

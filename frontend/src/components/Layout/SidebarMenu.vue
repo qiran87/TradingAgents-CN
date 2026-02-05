@@ -6,95 +6,42 @@
     router
     class="sidebar-menu"
   >
-    <el-menu-item index="/dashboard">
-      <el-icon><Odometer /></el-icon>
-      <template #title>仪表板</template>
-    </el-menu-item>
-
-    <el-menu-item index="/learning">
-      <el-icon><Reading /></el-icon>
-      <template #title>学习中心</template>
-    </el-menu-item>
-
-    <el-sub-menu index="/analysis">
-      <template #title>
-        <el-icon><TrendCharts /></el-icon>
-        <span>股票分析</span>
-      </template>
-      <el-menu-item index="/analysis/single">单股分析</el-menu-item>
-      <el-menu-item index="/analysis/batch">批量分析</el-menu-item>
-      <!-- 新增：将分析报告作为股票分析的子菜单 -->
-      <el-menu-item index="/reports">分析报告</el-menu-item>
-    </el-sub-menu>
-
-    <el-menu-item index="/tasks">
-      <el-icon><List /></el-icon>
-      <template #title>任务中心</template>
-    </el-menu-item>
-
-    <el-menu-item index="/screening">
-      <el-icon><Search /></el-icon>
-      <template #title>股票筛选</template>
-    </el-menu-item>
-
-    <el-menu-item index="/favorites">
-      <el-icon><Star /></el-icon>
-      <template #title>我的自选股</template>
-    </el-menu-item>
-
-    <el-menu-item index="/paper">
-      <el-icon><CreditCard /></el-icon>
-      <template #title>模拟交易</template>
-    </el-menu-item>
-
-
-    <!-- 分析报告已移至“股票分析”子菜单，保留注释便于追踪 -->
-    <!--
-    <el-menu-item index="/reports">
-      <el-icon><Document /></el-icon>
-      <template #title>分析报告</template>
-    </el-menu-item>
-    -->
-
-    <el-sub-menu index="/settings">
-      <template #title>
-        <el-icon><Setting /></el-icon>
-        <span>设置</span>
-      </template>
-
-      <!-- 个人设置 -->
-      <el-sub-menu index="/settings-personal">
-        <template #title>个人设置</template>
-        <el-menu-item index="/settings">通用设置</el-menu-item>
-        <el-menu-item index="/settings?tab=appearance">外观设置</el-menu-item>
-        <el-menu-item index="/settings?tab=analysis">分析偏好</el-menu-item>
-        <el-menu-item index="/settings?tab=notifications">通知设置</el-menu-item>
-        <el-menu-item index="/settings?tab=security">安全设置</el-menu-item>
+    <!-- 动态渲染菜单项 -->
+    <template v-for="item in visibleMenuItems" :key="item.path">
+      <!-- 有子菜单 -->
+      <el-sub-menu v-if="item.children && item.children.length > 0" :index="item.path">
+        <template #title>
+          <el-icon v-if="item.icon">
+            <component :is="getIconComponent(item.icon)" />
+          </el-icon>
+          <span>{{ item.title }}</span>
+        </template>
+        <!-- 递归渲染子菜单 -->
+        <template v-for="child in item.children" :key="child.path">
+          <el-sub-menu v-if="child.children && child.children.length > 0" :index="child.path">
+            <template #title>{{ child.title }}</template>
+            <el-menu-item
+              v-for="grandchild in child.children"
+              :key="grandchild.path"
+              :index="grandchild.path"
+            >
+              {{ grandchild.title }}
+            </el-menu-item>
+          </el-sub-menu>
+          <el-menu-item v-else :index="child.path">
+            {{ child.title }}
+          </el-menu-item>
+        </template>
       </el-sub-menu>
 
-      <!-- 系统配置 -->
-      <el-sub-menu index="/settings-config">
-        <template #title>系统配置</template>
-        <el-menu-item index="/settings/config">配置管理</el-menu-item>
-        <el-menu-item index="/settings/cache">缓存管理</el-menu-item>
-      </el-sub-menu>
-
-      <!-- 系统管理 -->
-      <el-sub-menu index="/settings-admin">
-        <template #title>系统管理</template>
-        <el-menu-item index="/settings/database">数据库管理</el-menu-item>
-        <el-menu-item index="/settings/logs">操作日志</el-menu-item>
-        <el-menu-item index="/settings/system-logs">系统日志</el-menu-item>
-        <el-menu-item index="/settings/sync">多数据源同步</el-menu-item>
-        <el-menu-item index="/settings/scheduler">定时任务</el-menu-item>
-        <el-menu-item index="/settings/usage">使用统计</el-menu-item>
-      </el-sub-menu>
-    </el-sub-menu>
-
-    <el-menu-item index="/about">
-      <el-icon><InfoFilled /></el-icon>
-      <template #title>关于</template>
-    </el-menu-item>
+      <!-- 无子菜单 -->
+      <el-menu-item v-else :index="item.path">
+        <el-icon v-if="item.icon">
+          <component :is="getIconComponent(item.icon)" />
+        </el-icon>
+        <template #title>{{ item.title }}</template>
+      </el-menu-item>
+    </template>
   </el-menu>
 </template>
 
@@ -102,23 +49,68 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
-import {
-  Odometer,
-  Reading,
-  TrendCharts,
-  Search,
-  Star,
-  List,
-  /* Document 移除：不再使用顶级分析报告菜单图标 */
-  Setting,
-  InfoFilled,
-  CreditCard
-} from '@element-plus/icons-vue'
+import { useAuthStore } from '@/stores/auth'
+import { menuConfig, getIconComponent, type MenuItem } from '@/config/menuConfig'
 
 const route = useRoute()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 
 const activeMenu = computed(() => route.path)
+
+/**
+ * 检查用户是否有菜单访问权限
+ * 开源版：所有登录用户都有admin权限，可以访问所有菜单
+ * 预留扩展：为将来的多权限系统做准备
+ */
+const hasMenuPermission = (requiredRoles?: string[]): boolean => {
+  // 未登录用户不能访问任何菜单
+  if (!authStore.isAuthenticated) {
+    return false
+  }
+
+  // 开源版：所有登录用户都是admin，可以访问所有菜单
+  if (authStore.isAdmin) {
+    return true
+  }
+
+  // 如果没有指定角色要求，默认允许访问
+  if (!requiredRoles || requiredRoles.length === 0) {
+    return true
+  }
+
+  // 检查用户是否具有所需角色之一
+  return requiredRoles.some(role => authStore.hasRole(role))
+}
+
+/**
+ * 递归过滤菜单项，只保留用户有权限的菜单
+ */
+const filterMenuByPermission = (items: MenuItem[]): MenuItem[] => {
+  return items.filter(item => {
+    // 检查是否隐藏
+    if (item.hidden) return false
+
+    // 检查权限
+    if (!hasMenuPermission(item.roles)) return false
+
+    // 如果有子菜单，递归过滤
+    if (item.children && item.children.length > 0) {
+      const filteredChildren = filterMenuByPermission(item.children)
+      // 如果所有子菜单都被过滤掉，则不显示父菜单
+      if (filteredChildren.length === 0) return false
+      // 更新子菜单列表
+      item.children = filteredChildren
+    }
+
+    return true
+  })
+}
+
+/**
+ * 根据权限过滤后的可见菜单项
+ */
+const visibleMenuItems = computed(() => filterMenuByPermission(menuConfig))
 </script>
 
 <style lang="scss" scoped>

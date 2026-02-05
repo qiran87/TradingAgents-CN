@@ -37,6 +37,7 @@ from app.routers import multi_market_stocks as multi_market_stocks_router
 from app.routers import notifications as notifications_router
 from app.routers import websocket_notifications as websocket_notifications_router
 from app.routers import scheduler as scheduler_router
+from app.routers import strategies as strategies_router
 from app.services.basics_sync_service import get_basics_sync_service
 from app.services.multi_source_basics_sync_service import MultiSourceBasicsSyncService
 from app.services.scheduler_service import set_scheduler_instance
@@ -212,6 +213,49 @@ async def _print_config_summary(logger):
         logger.error(f"Failed to print config summary: {e}")
 
 
+async def initialize_builtin_strategies():
+    """初始化内置策略数据
+
+    在应用启动时自动检测并初始化策略数据，仅在数据库为空时执行。
+    """
+    try:
+        from app.core.database import get_mongo_db
+        from app.scripts.init_strategies import STRATEGIES, CATEGORIES
+
+        db = get_mongo_db()
+        strategy_count = await db.strategies.count_documents({})
+
+        if strategy_count == 0:
+            logger.info("📊 检测到策略数据为空，开始自动初始化...")
+
+            # 创建索引
+            await db.strategies.create_index([("category", 1), ("usage_count", -1)])
+            await db.strategies.create_index([("name", "text"), ("description", "text")])
+            await db.strategies.create_index("strategy_id", unique=True)
+            await db.strategy_categories.create_index("category_id", unique=True)
+            logger.info("✅ 策略索引创建完成")
+
+            # 插入分类
+            await db.strategy_categories.delete_many({})
+            category_result = await db.strategy_categories.insert_many(CATEGORIES)
+            logger.info(f"✅ 已插入 {len(category_result.inserted_ids)} 个策略分类")
+
+            # 插入策略
+            await db.strategies.delete_many({})
+            strategy_result = await db.strategies.insert_many(STRATEGIES)
+            logger.info(f"✅ 已插入 {len(strategy_result.inserted_ids)} 个内置策略")
+
+            # 统计信息
+            total_params = sum(len(s.get("parameters", [])) for s in STRATEGIES)
+            logger.info(f"📊 策略初始化完成: {len(STRATEGIES)}个策略, {len(CATEGORIES)}个分类, {total_params}个参数")
+            logger.info("💡 策略API已就绪，访问 http://localhost:8000/docs 查看 backtest-strategies 接口")
+        else:
+            logger.info(f"📊 策略数据已存在 ({strategy_count}个策略)，跳过初始化")
+    except Exception as e:
+        logger.warning(f"⚠️  策略数据自动初始化失败: {e}")
+        logger.warning("💡 可以稍后手动运行: PYTHONPATH=. python3 -m app.scripts.init_strategies")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -228,6 +272,9 @@ async def lifespan(app: FastAPI):
         raise
 
     await init_db()
+
+    # 初始化内置策略数据
+    await initialize_builtin_strategies()
 
     #  配置桥接：将统一配置写入环境变量，供 TradingAgents 核心库使用
     try:
@@ -719,6 +766,7 @@ app.include_router(sse.router, prefix="/api/stream", tags=["streaming"])
 app.include_router(sync_router.router)
 app.include_router(multi_source_sync.router)
 app.include_router(paper_router.router, prefix="/api", tags=["paper"])
+app.include_router(strategies_router.router, tags=["backtest-strategies"])
 app.include_router(tushare_init.router, prefix="/api", tags=["tushare-init"])
 app.include_router(akshare_init.router, prefix="/api", tags=["akshare-init"])
 app.include_router(baostock_init.router, prefix="/api", tags=["baostock-init"])
