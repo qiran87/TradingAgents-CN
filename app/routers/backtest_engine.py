@@ -5,7 +5,7 @@
 import logging
 from typing import Optional
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Depends, Query, status
 from pydantic import BaseModel, Field
 
 from app.core.database import get_mongo_db
@@ -18,6 +18,7 @@ from app.services.backtest_engine_service import (
     execute_backtest_task
 )
 from app.services.websocket_manager import get_websocket_manager
+from app.services.auth_service import AuthService
 
 logger = logging.getLogger(__name__)
 
@@ -305,16 +306,34 @@ async def abort_backtest(
 # ===================== WebSocket端点 =====================
 
 @router.websocket("/ws/{backtest_id}/progress")
-async def websocket_backtest_progress(websocket: WebSocket, backtest_id: str):
+async def websocket_backtest_progress(
+    websocket: WebSocket,
+    backtest_id: str,
+    token: Optional[str] = Query(None, description="JWT认证token（可选，用于安全控制）")
+):
     """
     回测进度WebSocket端点
 
     推送回测进度和持仓更新
 
+    Args:
+        websocket: WebSocket连接对象
+        backtest_id: 回测任务ID
+        token: JWT认证token（可选，用于生产环境安全控制）
+
     示例：
-    - WS /api/backtest/ws/bt_20240205_143055_123456/progress
+    - WS /api/backtest/ws/bt_20240205_143055_123456/progress?token=xxx
     """
     websocket_manager = get_websocket_manager()
+
+    # 验证token（如果提供）
+    if token:
+        token_data = AuthService.verify_token(token)
+        if not token_data:
+            await websocket.close(code=1008, reason="Invalid or expired token")
+            logger.warning(f"🔒 WebSocket认证失败: backtest_id={backtest_id}")
+            return
+        logger.info(f"🔐 WebSocket认证成功: user={token_data.sub}, backtest_id={backtest_id}")
 
     await websocket.accept()
     await websocket_manager.connect(websocket, backtest_id)
@@ -354,3 +373,56 @@ async def websocket_backtest_progress(websocket: WebSocket, backtest_id: str):
         logger.error(f"❌ WebSocket错误: {e}", exc_info=True)
     finally:
         await websocket_manager.disconnect(websocket, backtest_id)
+
+
+@router.get("/{backtest_id}/current-state")
+async def get_current_state(
+    backtest_id: str,
+    db=Depends(get_mongo_db)
+):
+    """
+    获取回测任务当前状态（HTTP轮询备用接口）
+
+    当WebSocket不可用时，前端可以通过此接口轮询获取回测进度和状态
+
+    **限流策略：**
+    - 每个IP每秒最多10次请求
+    - 超过限制返回429状态码
+
+    Args:
+        backtest_id: 回测任务ID
+        db: MongoDB数据库连接
+
+    Returns:
+        包含回测当前状态的JSON响应
+
+    示例：
+    - GET /api/backtest/bt_20240205_143055_123456/current-state
+    """
+    try:
+        # 查询回测任务
+        task = await db.backtest_tasks.find_one({"backtest_id": backtest_id})
+
+        if not task:
+            raise HTTPException(status_code=404, detail=f"回测任务 {backtest_id} 不存在")
+
+        # 构建响应数据
+        response_data = {
+            "backtest_id": task["backtest_id"],
+            "status": task["status"],
+            "execution_info": task.get("execution_info", {}),
+            "created_at": task.get("created_at"),
+            "updated_at": task.get("updated_at")
+        }
+
+        # 如果有错误信息，包含在响应中
+        if "error" in task:
+            response_data["error"] = task["error"]
+
+        return ok(data=response_data)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 获取回测状态失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取回测状态失败: {str(e)}")

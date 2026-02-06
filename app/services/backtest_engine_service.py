@@ -554,6 +554,16 @@ class BacktestEngine:
         await self.db.backtest_trades.insert_one(trade_doc)
         logger.info(f"📈 买入: date={date}, shares={shares}, price={price:.2f}, total_cost={total_cost:.2f}")
 
+        # 发送交易信号
+        await self._send_trade_signal(
+            backtest_id=backtest_id,
+            trade_type="buy",
+            price=price,
+            shares=shares,
+            amount=amount,
+            date=date
+        )
+
     async def _execute_sell(
         self,
         backtest_id: str,
@@ -624,6 +634,16 @@ class BacktestEngine:
 
         await self.db.backtest_trades.insert_one(trade_doc)
         logger.info(f"📉 卖出: date={date}, shares={sell_shares}, price={price:.2f}, amount={amount:.2f}")
+
+        # 发送交易信号
+        await self._send_trade_signal(
+            backtest_id=backtest_id,
+            trade_type="sell",
+            price=price,
+            shares=sell_shares,
+            amount=amount,
+            date=date
+        )
 
     async def _update_task_status(
         self,
@@ -770,6 +790,65 @@ class BacktestEngine:
         }
         await self.websocket_manager.send_progress_update(backtest_id, message)
 
+    async def _send_trade_signal(
+        self,
+        backtest_id: str,
+        trade_type: str,
+        price: float,
+        shares: int,
+        amount: float,
+        date: str
+    ):
+        """
+        发送交易信号到WebSocket
+
+        Args:
+            backtest_id: 回测任务ID
+            trade_type: 交易类型 (buy/sell)
+            price: 成交价格
+            shares: 成交数量
+            amount: 成交金额
+            date: 交易日期
+        """
+        message = {
+            "type": "trade_signal",
+            "data": {
+                "backtest_id": backtest_id,
+                "trade": {
+                    "type": trade_type,
+                    "date": date,
+                    "price": round(price, 2),
+                    "shares": shares,
+                    "amount": round(amount, 2)
+                }
+            }
+        }
+        await self.websocket_manager.send_progress_update(backtest_id, message)
+
+    async def _send_error_message(
+        self,
+        backtest_id: str,
+        error: Exception
+    ):
+        """
+        发送错误信息到WebSocket
+
+        Args:
+            backtest_id: 回测任务ID
+            error: 异常对象
+        """
+        message = {
+            "type": "error",
+            "data": {
+                "backtest_id": backtest_id,
+                "error": {
+                    "code": type(error).__name__,
+                    "message": str(error)
+                }
+            }
+        }
+        await self.websocket_manager.send_progress_update(backtest_id, message)
+
     async def _complete_backtest(self, backtest_id: str, state: BacktestState):
         """完成回测"""
         # 获取最后一日的行情
@@ -823,6 +902,9 @@ class BacktestEngine:
                 "updated_at": datetime.now(timezone.utc)
             }}
         )
+
+        # 发送错误信息到WebSocket
+        await self._send_error_message(backtest_id, error)
 
     async def pause_execution(self):
         """设置暂停标志"""
