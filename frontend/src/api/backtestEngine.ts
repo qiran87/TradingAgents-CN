@@ -93,6 +93,94 @@ export interface WSMessage {
 }
 
 /**
+ * 收益指标
+ */
+export interface ReturnMetrics {
+  total_return: number                    // 总收益率
+  annual_return: number                   // 年化收益率
+  cumulative_returns: number[]            // 累计收益率序列
+  daily_returns: number[]                 // 日收益率序列
+}
+
+/**
+ * 风险指标
+ */
+export interface RiskMetrics {
+  max_drawdown: number                    // 最大回撤
+  volatility: number                      // 波动率
+  downside_volatility: number             // 下行波动率
+  var_95: number                          // 95% VaR
+}
+
+/**
+ * 风险调整收益指标
+ */
+export interface RiskAdjustedMetrics {
+  sharpe_ratio: number                    // 夏普比率
+  sortino_ratio: number                   // 索提诺比率
+  calmar_ratio: number                    // 卡玛比率
+}
+
+/**
+ * 交易统计
+ */
+export interface TradingStats {
+  total_trades: number                    // 总交易次数
+  winning_trades: number                  // 盈利交易次数
+  losing_trades: number                   // 亏损交易次数
+  win_rate: number                        // 胜率
+  avg_profit: number                      // 平均盈利
+  avg_loss: number                        // 平均亏损
+  profit_loss_ratio: number               // 盈亏比
+}
+
+/**
+ * 资金曲线
+ */
+export interface EquityCurve {
+  dates: string[]                         // 日期列表
+  total_assets: number[]                  // 总资产
+  cash: number[]                          // 现金
+  position_value: number[]                // 持仓市值
+}
+
+/**
+ * 回测结果
+ */
+export interface BacktestResults {
+  backtest_id: string                     // 回测任务ID
+  return_metrics: ReturnMetrics           // 收益指标
+  risk_metrics: RiskMetrics               // 风险指标
+  risk_adjusted_metrics: RiskAdjustedMetrics  // 风险调整收益指标
+  trading_stats: TradingStats             // 交易统计
+  equity_curve: EquityCurve               // 资金曲线
+  created_at: string                      // 创建时间
+}
+
+/**
+ * 交易记录
+ */
+export interface TradeRecord {
+  backtest_id: string                     // 回测任务ID
+  date: string                            // 交易日期
+  trade_type: 'buy' | 'sell'              // 交易类型
+  price: number                           // 成交价格
+  shares: number                          // 成交数量
+  amount: number                          // 成交金额
+  commission: number                      // 佣金
+  stamp_duty: number                      // 印花税
+  slippage: number                        // 滑点
+  total_cost: number                      // 总费用
+  cash_before: number                     // 交易前现金
+  cash_after: number                      // 交易后现金
+  position_before: number                 // 交易前持仓
+  position_after: number                  // 交易后持仓
+  cost_basis?: number                     // 成本基(卖出时)
+  signal: any                             // 交易信号
+  created_at: string                      // 创建时间
+}
+
+/**
  * 回测引擎API
  */
 export const backtestEngineApi = {
@@ -144,6 +232,57 @@ export const backtestEngineApi = {
   async abortBacktest(backtestId: string) {
     return ApiClient.delete_<{ message: string }>(
       `/api/backtest/${backtestId}`
+    )
+  },
+
+  /**
+   * 获取回测结果
+   * @param backtestId 回测任务ID
+   */
+  async getBacktestResults(backtestId: string) {
+    return ApiClient.get<BacktestResults>(
+      `/api/backtest/${backtestId}/results`
+    )
+  },
+
+  /**
+   * 获取交易明细（支持分页）
+   * @param backtestId 回测任务ID
+   * @param page 页码（默认1）
+   * @param pageSize 每页数量（默认50）
+   */
+  async getBacktestTrades(backtestId: string, page: number = 1, pageSize: number = 50) {
+    return ApiClient.get<{
+      trades: TradeRecord[],
+      count: number,
+      pagination: {
+        page: number
+        page_size: number
+        total: number
+        total_pages: number
+      }
+    }>(
+      `/api/backtest/${backtestId}/trades?page=${page}&page_size=${pageSize}`
+    )
+  },
+
+  /**
+   * 获取资金曲线
+   * @param backtestId 回测任务ID
+   */
+  async getEquityCurve(backtestId: string) {
+    return ApiClient.get<EquityCurve>(
+      `/api/backtest/${backtestId}/equity-curve`
+    )
+  },
+
+  /**
+   * 触发结果计算
+   * @param backtestId 回测任务ID
+   */
+  async calculateResults(backtestId: string) {
+    return ApiClient.post<{ message: string }>(
+      `/api/backtest/${backtestId}/calculate-results`
     )
   },
 

@@ -866,6 +866,16 @@ class BacktestEngine:
             }}
         )
 
+        # 自动计算并保存回测结果
+        try:
+            from app.services.result_calculator import get_result_calculator_service
+            calculator = get_result_calculator_service()
+            await calculator.calculate_and_save_results(backtest_id)
+            logger.info(f"✅ 回测结果已自动计算并保存: {backtest_id}")
+        except Exception as e:
+            logger.error(f"⚠️  自动计算回测结果失败: {backtest_id}, 错误: {e}", exc_info=True)
+            # 结果计算失败不影响回测完成状态
+
     async def _pause_backtest(self, backtest_id: str, state: BacktestState, bar_index: int):
         """暂停回测"""
         await self.db.backtest_tasks.update_one(

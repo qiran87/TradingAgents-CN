@@ -17,8 +17,14 @@ from app.services.backtest_engine_service import (
     get_backtest_engine_service,
     execute_backtest_task
 )
+from app.services.result_calculator import (
+    ResultCalculator,
+    get_result_calculator_service,
+    BacktestNotFoundError as ResultNotFoundError
+)
 from app.services.websocket_manager import get_websocket_manager
 from app.services.auth_service import AuthService
+from app.routers.auth_db import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -426,3 +432,188 @@ async def get_current_state(
     except Exception as e:
         logger.error(f"❌ 获取回测状态失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取回测状态失败: {str(e)}")
+
+
+# ===================== 结果查询API =====================
+
+@router.get("/{backtest_id}/results", response_model=dict)
+async def get_backtest_results(
+    backtest_id: str,
+    current_user: dict = Depends(get_current_user),
+    db=Depends(get_mongo_db)
+):
+    """
+    获取回测结果
+
+    获取回测任务的完整结果，包括收益指标、风险指标、交易统计等
+
+    示例：
+    - GET /api/backtest/bt_20240205_143055_123456/results
+    """
+    try:
+        # 验证用户权限
+        task = await db.backtest_tasks.find_one({"backtest_id": backtest_id})
+        if not task:
+            raise HTTPException(status_code=404, detail="回测任务不存在")
+
+        # 检查是否有权访问（只能访问自己的任务，或管理员可以访问所有）
+        if task.get("user_id") != current_user.get("sub") and not current_user.get("is_admin", False):
+            raise HTTPException(status_code=403, detail="无权访问此回测结果")
+
+        calculator = get_result_calculator_service()
+        result = await calculator.get_results(backtest_id)
+
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail=f"回测结果不存在，请确认回测任务 {backtest_id} 已完成"
+            )
+
+        return ok(data=result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 获取回测结果失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取回测结果失败: {str(e)}")
+
+
+@router.get("/{backtest_id}/trades", response_model=dict)
+async def get_backtest_trades(
+    backtest_id: str,
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(50, ge=1, le=1000, description="每页数量"),
+    current_user: dict = Depends(get_current_user),
+    db=Depends(get_mongo_db)
+):
+    """
+    获取交易明细（支持分页）
+
+    获取回测任务的交易记录，包括买入、卖出交易
+
+    示例：
+    - GET /api/backtest/bt_20240205_143055_123456/trades?page=1&page_size=50
+    """
+    try:
+        # 验证用户权限
+        task = await db.backtest_tasks.find_one({"backtest_id": backtest_id})
+        if not task:
+            raise HTTPException(status_code=404, detail="回测任务不存在")
+
+        # 检查是否有权访问
+        if task.get("user_id") != current_user.get("sub") and not current_user.get("is_admin", False):
+            raise HTTPException(status_code=403, detail="无权访问此交易明细")
+
+        calculator = get_result_calculator_service()
+        trades = await calculator.get_trades(backtest_id, limit=page_size)  # 限制最大返回数量
+
+        # 手动分页
+        total = len(trades)
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_trades = trades[start_idx:end_idx]
+
+        return ok(data={
+            "trades": paginated_trades,
+            "count": len(paginated_trades),
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size
+            }
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 获取交易明细失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取交易明细失败: {str(e)}")
+
+
+@router.get("/{backtest_id}/equity-curve", response_model=dict)
+async def get_equity_curve(
+    backtest_id: str,
+    current_user: dict = Depends(get_current_user),
+    db=Depends(get_mongo_db)
+):
+    """
+    获取资金曲线
+
+    获取回测任务的资金曲线数据，包括总资产、现金、持仓市值的变化
+
+    示例：
+    - GET /api/backtest/bt_20240205_143055_123456/equity-curve
+    """
+    try:
+        # 验证用户权限
+        task = await db.backtest_tasks.find_one({"backtest_id": backtest_id})
+        if not task:
+            raise HTTPException(status_code=404, detail="回测任务不存在")
+
+        # 检查是否有权访问
+        if task.get("user_id") != current_user.get("sub") and not current_user.get("is_admin", False):
+            raise HTTPException(status_code=403, detail="无权访问此资金曲线")
+
+        calculator = get_result_calculator_service()
+        equity_curve = await calculator.get_equity_curve(backtest_id)
+
+        if not equity_curve:
+            raise HTTPException(
+                status_code=404,
+                detail=f"资金曲线不存在，请确认回测任务 {backtest_id} 已完成"
+            )
+
+        return ok(data=equity_curve)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 获取资金曲线失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取资金曲线失败: {str(e)}")
+
+
+@router.post("/{backtest_id}/calculate-results", response_model=dict)
+async def calculate_backtest_results(
+    backtest_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+    db=Depends(get_mongo_db)
+):
+    """
+    触发结果计算
+
+    手动触发回测结果计算（通常在回测完成时自动调用）
+
+    示例：
+    - POST /api/backtest/bt_20240205_143055_123456/calculate-results
+    """
+    try:
+        # 检查任务是否存在
+        task = await db.backtest_tasks.find_one({"backtest_id": backtest_id})
+        if not task:
+            raise HTTPException(status_code=404, detail=f"回测任务 {backtest_id} 不存在")
+
+        # 检查是否有权操作
+        if task.get("user_id") != current_user.get("sub") and not current_user.get("is_admin", False):
+            raise HTTPException(status_code=403, detail="无权操作此回测任务")
+
+        if task["status"] != "completed":
+            raise HTTPException(
+                status_code=400,
+                detail=f"只能计算已完成的回测任务，当前状态: {task['status']}"
+            )
+
+        # 在后台计算结果
+        calculator = get_result_calculator_service()
+        background_tasks.add_task(calculator.calculate_and_save_results, backtest_id)
+
+        logger.info(f"✅ 已触发结果计算: {backtest_id}")
+
+        return ok(data={"message": "正在计算结果，请稍后查询"})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 触发结果计算失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"触发结果计算失败: {str(e)}")
