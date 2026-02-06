@@ -221,6 +221,24 @@ const routes: RouteRecordRaw[] = [
           title: '策略管理',
           requiresAuth: true
         }
+      },
+      {
+        path: 'control',
+        name: 'BacktestControl',
+        component: () => import('@/views/Backtest/BacktestControlPanel.vue'),
+        meta: {
+          title: '回测控制',
+          requiresAuth: true
+        }
+      },
+      {
+        path: 'history',
+        name: 'BacktestHistory',
+        component: () => import('@/views/Backtest/BacktestHistory.vue'),
+        meta: {
+          title: '历史记录',
+          requiresAuth: true
+        }
       }
     ]
   },
