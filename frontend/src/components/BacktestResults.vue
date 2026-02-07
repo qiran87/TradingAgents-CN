@@ -16,9 +16,37 @@
       <template #header>
         <div class="header">
           <span class="title">回测结果分析</span>
-          <el-tag v-if="results" type="success">
-            {{ formatPercentage(results.return_metrics.total_return) }}
-          </el-tag>
+          <div class="header-actions">
+            <el-tag v-if="results" type="success">
+              {{ formatPercentage(results.return_metrics.total_return) }}
+            </el-tag>
+            <!-- 导出按钮组 -->
+            <el-button-group v-if="results" style="margin-left: 12px">
+              <el-button
+                type="primary"
+                :loading="excelExportLoading"
+                @click="handleExportExcel"
+                size="small"
+              >
+                <el-icon><Download /></el-icon>
+                导出Excel
+              </el-button>
+              <el-dropdown @command="handleExportCharts" size="small">
+                <el-button type="success">
+                  <el-icon><Picture /></el-icon>
+                  导出图表
+                  <el-icon class="el-icon--right"><arrow-down /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="equity">资金曲线图</el-dropdown-item>
+                    <el-dropdown-item command="drawdown">回撤图</el-dropdown-item>
+                    <el-dropdown-item command="all">全部图表</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </el-button-group>
+          </div>
         </div>
       </template>
 
@@ -272,9 +300,13 @@ import {
   DataAnalysis,
   List,
   Document,
-  Refresh
+  Refresh,
+  Download,
+  Picture,
+  ArrowDown
 } from '@element-plus/icons-vue'
 import { backtestEngineApi, type BacktestResults, type TradeRecord } from '@/api/backtestEngine'
+import { backtestExportApi, chartExportUtils } from '@/api/backtestExport'
 
 interface Props {
   backtestId: string
@@ -290,6 +322,7 @@ const tradesLoading = ref(false)
 const error = ref('')
 const chartRef = ref<HTMLElement>()
 const chartError = ref(false)
+const excelExportLoading = ref(false)
 
 // 交易明细分页
 const currentPage = ref(1)
@@ -472,6 +505,70 @@ const formatPercentage = (value: number) => {
   return (value * 100).toFixed(2) + '%'
 }
 
+// 导出Excel
+const handleExportExcel = async () => {
+  if (!props.backtestId) {
+    ElMessage.warning('回测ID不存在')
+    return
+  }
+
+  excelExportLoading.value = true
+  try {
+    await backtestExportApi.downloadExcel(props.backtestId)
+    ElMessage.success('Excel导出成功')
+  } catch (err: any) {
+    console.error('导出Excel失败:', err)
+    const errorMsg = err.response?.data?.detail || err.message || '导出Excel失败'
+    ElMessage.error(errorMsg)
+  } finally {
+    excelExportLoading.value = false
+  }
+}
+
+// 导出图表
+const handleExportCharts = async (command: string) => {
+  if (!props.backtestId) {
+    ElMessage.warning('回测ID不存在')
+    return
+  }
+
+  try {
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '')
+
+    if (command === 'equity') {
+      // 导出资金曲线图
+      chartExportUtils.exportEChartsToPNG(
+        'equity-chart',
+        `equity_curve_${props.backtestId}_${timestamp}`
+      )
+      ElMessage.success('资金曲线图导出成功')
+    } else if (command === 'drawdown') {
+      // 导出回撤图
+      chartExportUtils.exportEChartsToPNG(
+        'drawdown-chart',
+        `drawdown_${props.backtestId}_${timestamp}`
+      )
+      ElMessage.success('回撤图导出成功')
+    } else if (command === 'all') {
+      // 导出所有图表
+      chartExportUtils.exportMultipleCharts([
+        {
+          chartId: 'equity-chart',
+          filename: `equity_curve_${props.backtestId}_${timestamp}`
+        },
+        {
+          chartId: 'drawdown-chart',
+          filename: `drawdown_${props.backtestId}_${timestamp}`
+        }
+      ])
+      ElMessage.success('全部图表导出成功')
+    }
+  } catch (err: any) {
+    console.error('导出图表失败:', err)
+    ElMessage.error('导出图表失败')
+  }
+}
+
 // 获取收益率样式类
 const getReturnClass = (value: number) => {
   return value >= 0 ? 'positive' : 'negative'
@@ -531,6 +628,12 @@ onUnmounted(() => {
     .title {
       font-size: 18px;
       font-weight: bold;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
     }
   }
 
