@@ -95,22 +95,14 @@
           </template>
 
           <el-form :model="form" :rules="formRules" ref="formRef" label-width="140px" label-position="left">
-            <!-- 日期范围 -->
-            <el-form-item label="回测日期范围" prop="dateRange" required>
-              <el-date-picker
-                v-model="dateRange"
-                type="daterange"
-                range-separator="至"
-                start-placeholder="开始日期"
-                end-placeholder="结束日期"
-                format="YYYY-MM-DD"
-                value-format="YYYY-MM-DD"
-                :disabled-date="disabledDate"
-                style="width: 100%"
+            <!-- 日期范围 - 使用日期范围选择器 -->
+            <el-form-item label="回测日期范围" required>
+              <TradingDayRangePicker
+                v-model:start-date="form.start_date"
+                v-model:end-date="form.end_date"
+                :show-stats="true"
+                :show-quick-options="true"
               />
-              <div class="form-tip">
-                共{{ dateRangeDays }}天，约{{ Math.floor(dateRangeDays / 250) }}年
-              </div>
             </el-form-item>
 
             <!-- 初始资金 -->
@@ -143,17 +135,13 @@
               </div>
             </el-form-item>
 
-            <!-- 股票代码 -->
+            <!-- 股票代码 - 使用股票选择器 -->
             <el-form-item label="股票代码" prop="stock_code" required>
-              <el-input
+              <StockSelector
                 v-model="form.stock_code"
-                placeholder="请输入股票代码（如 000001.SZ）"
-                clearable
-              >
-                <template #append>
-                  <el-button @click="handleSearchStock">搜索</el-button>
-                </template>
-              </el-input>
+                :show-market="true"
+                placeholder="请输入股票代码或名称（如 000001.SZ 或 平安银行）"
+              />
             </el-form-item>
           </el-form>
         </el-card>
@@ -595,6 +583,8 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useBacktestEngineStore } from '@/stores/backtestEngine'
 import BacktestResults from '@/components/BacktestResults.vue'
+import TradingDayRangePicker from '@/components/TradingDayRangePicker.vue'
+import StockSelector from '@/components/StockSelector.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   TrendCharts,
@@ -635,11 +625,8 @@ const form = ref({
   strategy_params: {}
 })
 
-const dateRange = ref<string[]>([])
-
 // 表单验证规则
 const formRules = {
-  dateRange: [{ required: true, message: '请选择日期范围', trigger: 'change' }],
   initial_capital: [
     { required: true, message: '请输入初始资金', trigger: 'blur' },
     { type: 'number', min: 1000, max: 10000000, message: '资金范围：1,000 - 10,000,000元', trigger: 'blur' }
@@ -703,7 +690,8 @@ const guideStep = ref(0)
 // 计算属性
 const canStartBacktest = computed(() => {
   return form.value.stock_code &&
-         dateRange.value?.length === 2 &&
+         form.value.start_date &&
+         form.value.end_date &&
          form.value.initial_capital >= 1000 &&
          form.value.min_purchase >= 100 &&
          form.value.min_purchase % 100 === 0 &&
@@ -727,20 +715,11 @@ const filteredStrategies = computed(() => {
   })
 })
 
-const dateRangeDays = computed(() => {
-  if (dateRange.value?.length === 2) {
-    const start = new Date(dateRange.value[0])
-    const end = new Date(dateRange.value[1])
-    return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
-  }
-  return 0
-})
-
 const currentStep = computed(() => {
   if (backtestStore.isCompleted) return 4
   if (backtestStore.isRunning || backtestStore.isPaused) return 3
   if (form.value.strategy_id) return 2
-  if (dateRange.value?.length === 2) return 1
+  if (form.value.start_date && form.value.end_date) return 1
   return 0
 })
 
@@ -757,8 +736,8 @@ const currentStatusText = computed(() => {
   if (backtestStore.isPaused) return '已暂停'
   if (backtestStore.isCompleted) return '已完成'
   if (backtestStore.isFailed) return '失败'
-  if (form.value.strategy_id && dateRange.value?.length === 2) return '策略已确认，待触发回测'
-  if (dateRange.value?.length === 2) return '回测参数已确认，待选择策略'
+  if (form.value.strategy_id && form.value.start_date && form.value.end_date) return '策略已确认，待触发回测'
+  if (form.value.start_date && form.value.end_date) return '回测参数已确认，待选择策略'
   return '未开始回测'
 })
 
@@ -780,12 +759,10 @@ const currentDate = computed(() => {
 })
 
 // 方法
-function disabledDate(time: Date) {
-  return time.getTime() > Date.now()
-}
-
+/**
+ * 处理交易日数量变化
+ */
 function handleConfirmParams() {
-  formRef.value?.validateField('dateRange')
   formRef.value?.validateField('initial_capital')
   formRef.value?.validateField('min_purchase')
   ElMessage.success('参数已确认')
@@ -813,8 +790,6 @@ async function handleStartBacktest() {
   }
 
   // 显示参数确认弹窗
-  form.value.start_date = dateRange.value[0]
-  form.value.end_date = dateRange.value[1]
   showParamsConfirmDialog.value = true
 }
 
@@ -871,7 +846,6 @@ function handleResetParams() {
     strategy_id: '',
     strategy_params: {}
   }
-  dateRange.value = []
   ElMessage.success('参数已重置')
 }
 
@@ -889,8 +863,8 @@ async function handleLoadSavedParams(command: string | number) {
       if (!value) return
 
       const params = {
-        start_date: dateRange.value[0] || '',
-        end_date: dateRange.value[1] || '',
+        start_date: form.value.start_date || '',
+        end_date: form.value.end_date || '',
         initial_capital: form.value.initial_capital,
         min_purchase: form.value.min_purchase,
         stock_code: form.value.stock_code,
@@ -921,7 +895,6 @@ async function handleLoadSavedParams(command: string | number) {
       form.value.stock_code = params.stock_code
       form.value.strategy_id = params.strategy_id
       form.value.strategy_params = params.strategy_params
-      dateRange.value = [params.start_date, params.end_date]
 
       // 增加使用次数
       await savedParamsApi.useParams(params.id!)
@@ -947,10 +920,6 @@ function resetStrategyParam(paramName: string) {
   if (param && param.default !== undefined) {
     form.value.strategy_params[paramName] = param.default
   }
-}
-
-function handleSearchStock() {
-  ElMessage.info('股票搜索功能开发中...')
 }
 
 function formatCurrency(value: number): string {

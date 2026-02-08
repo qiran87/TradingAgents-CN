@@ -1,7 +1,7 @@
 /**
  * 交易日历API
  */
-import { ApiClient } from './request'
+import { request } from './request'
 
 /**
  * 交易日信息
@@ -71,7 +71,7 @@ export const tradingCalendarApi = {
    * @param endDate 结束日期 YYYY-MM-DD
    */
   async getTradingDays(startDate: string, endDate: string) {
-    return ApiClient.get<TradingDaysListResponse>(
+    return request.get<TradingDaysListResponse>(
       '/api/backtest/trading-days',
       { start_date: startDate, end_date: endDate }
     )
@@ -83,7 +83,7 @@ export const tradingCalendarApi = {
    * @param endDate 结束日期 YYYY-MM-DD
    */
   async getTradingCalendarInfo(startDate: string, endDate: string) {
-    return ApiClient.get<TradingCalendarInfo>(
+    return request.get<TradingCalendarInfo>(
       '/api/backtest/trading-days/info',
       { start_date: startDate, end_date: endDate }
     )
@@ -94,7 +94,7 @@ export const tradingCalendarApi = {
    * @param date 日期 YYYY-MM-DD
    */
   async isTradingDay(date: string) {
-    return ApiClient.get<TradingDayInfo>(`/api/backtest/trading-days/${date}`)
+    return request.get<TradingDayInfo>(`/api/backtest/trading-days/${date}`)
   },
 
   /**
@@ -102,7 +102,7 @@ export const tradingCalendarApi = {
    * @param date 日期 YYYY-MM-DD
    */
   async getPreviousTradingDay(date: string) {
-    return ApiClient.get<PreviousTradingDayResponse>(
+    return request.get<PreviousTradingDayResponse>(
       `/api/backtest/trading-days/${date}/previous`
     )
   },
@@ -112,7 +112,7 @@ export const tradingCalendarApi = {
    * @param date 日期 YYYY-MM-DD
    */
   async getNextTradingDay(date: string) {
-    return ApiClient.get<NextTradingDayResponse>(
+    return request.get<NextTradingDayResponse>(
       `/api/backtest/trading-days/${date}/next`
     )
   }

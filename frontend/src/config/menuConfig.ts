@@ -98,13 +98,23 @@ export const menuConfig: MenuItem[] = [
   },
   {
     path: '/backtest',
-    title: '回测管理',
+    title: '股票回测',
     icon: 'TrendCharts',
     roles: ['admin', 'user'],
     children: [
       {
+        path: '/backtest/control',
+        title: '执行回测',
+        roles: ['admin', 'user']
+      },
+      {
         path: '/backtest/strategies',
-        title: '策略管理',
+        title: '策略列表',
+        roles: ['admin', 'user']
+      },
+      {
+        path: '/backtest/history',
+        title: '历史记录',
         roles: ['admin', 'user']
       }
     ]

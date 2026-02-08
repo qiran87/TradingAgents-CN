@@ -1,7 +1,7 @@
 /**
  * 回测结果导出 API
  */
-import ApiClient from './client'
+import { request, type ApiResponse } from './request'
 
 export interface ExportStatusResponse {
   success: boolean
@@ -22,7 +22,7 @@ export const backtestExportApi = {
    * @returns Promise<Blob> Excel文件的Blob对象
    */
   async exportToExcel(backtestId: string): Promise<Blob> {
-    const response = await ApiClient.get<Blob>(
+    const response = await request.get<Blob>(
       `/api/backtest/${backtestId}/export/excel`,
       {
         responseType: 'blob'
@@ -37,7 +37,7 @@ export const backtestExportApi = {
    * @returns 导出状态信息
    */
   async getExportStatus(backtestId: string): Promise<ExportStatusResponse> {
-    const response = await ApiClient.get<ExportStatusResponse>(
+    const response = await request.get<ExportStatusResponse>(
       `/api/backtest/${backtestId}/export/status`
     )
     return response.data
