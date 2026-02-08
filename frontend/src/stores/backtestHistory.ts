@@ -50,7 +50,13 @@ export const useBacktestHistoryStore = defineStore('backtestHistory', () => {
   const filters = ref({
     strategy_id: '',
     stock_code: '',
-    search: ''
+    search: '',
+    start_date: '',          // ✅ 新增：开始日期
+    end_date: '',            // ✅ 新增：结束日期
+    initial_capital_min: '', // ✅ 新增：最小初始资金
+    initial_capital_max: '', // ✅ 新增：最大初始资金
+    return_rate_min: '',     // ✅ 新增：最小收益率
+    return_rate_max: ''      // ✅ 新增：最大收益率
   })
 
   // 分页
@@ -72,7 +78,7 @@ export const useBacktestHistoryStore = defineStore('backtestHistory', () => {
   // ===================== Actions =====================
 
   /**
-   * 获取历史记录列表
+   * 获取历史记录列表（增强版：支持日期范围、资金范围、收益率范围筛选）
    */
   async function fetchHistoryList(reset = true) {
     listLoading.value = true
@@ -90,7 +96,13 @@ export const useBacktestHistoryStore = defineStore('backtestHistory', () => {
         strategy_id: filters.value.strategy_id || undefined,
         stock_code: filters.value.stock_code || undefined,
         search: filters.value.search || undefined,
-        include_deleted: showRecycleBin.value
+        include_deleted: showRecycleBin.value,
+        start_date: filters.value.start_date || undefined,  // ✅ 新增
+        end_date: filters.value.end_date || undefined,        // ✅ 新增
+        initial_capital_min: filters.value.initial_capital_min ? parseFloat(filters.value.initial_capital_min) : undefined,  // ✅ 新增
+        initial_capital_max: filters.value.initial_capital_max ? parseFloat(filters.value.initial_capital_max) : undefined,  // ✅ 新增
+        return_rate_min: filters.value.return_rate_min ? parseFloat(filters.value.return_rate_min) / 100 : undefined,      // ✅ 新增（百分比转小数）
+        return_rate_max: filters.value.return_rate_max ? parseFloat(filters.value.return_rate_max) / 100 : undefined       // ✅ 新增（百分比转小数）
       })
 
       if (reset) {
@@ -357,13 +369,19 @@ export const useBacktestHistoryStore = defineStore('backtestHistory', () => {
   }
 
   /**
-   * 重置筛选条件
+   * 重置筛选条件（增强版）
    */
   function resetFilters() {
     filters.value = {
       strategy_id: '',
       stock_code: '',
-      search: ''
+      search: '',
+      start_date: '',
+      end_date: '',
+      initial_capital_min: '',
+      initial_capital_max: '',
+      return_rate_min: '',
+      return_rate_max: ''
     }
   }
 

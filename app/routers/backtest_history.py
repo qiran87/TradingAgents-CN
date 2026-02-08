@@ -106,13 +106,19 @@ async def get_history_list(
     stock_code: Optional[str] = Query(None, description="股票代码筛选"),
     search: Optional[str] = Query(None, description="关键词搜索"),
     include_deleted: bool = Query(False, description="是否包含已删除记录（回收站）"),
+    start_date: Optional[str] = Query(None, description="回测开始日期筛选（YYYY-MM-DD格式）"),
+    end_date: Optional[str] = Query(None, description="回测结束日期筛选（YYYY-MM-DD格式）"),
+    initial_capital_min: Optional[float] = Query(None, description="最小初始资金筛选"),
+    initial_capital_max: Optional[float] = Query(None, description="最大初始资金筛选"),
+    return_rate_min: Optional[float] = Query(None, description="最小收益率筛选（0.1表示10%）"),
+    return_rate_max: Optional[float] = Query(None, description="最大收益率筛选（0.1表示10%）"),
     current_user: dict = Depends(get_current_user),
     service: HistoryService = Depends(get_history_service_instance)
 ):
     """
-    获取历史记录列表
+    获取历史记录列表（增强版：支持日期范围、资金范围、收益率范围筛选）
 
-    支持分页、筛选和搜索功能
+    支持分页、多维度筛选和搜索功能
 
     Args:
         skip: 跳过记录数（分页用）
@@ -120,6 +126,13 @@ async def get_history_list(
         strategy_id: 按策略ID筛选
         stock_code: 按股票代码筛选
         search: 按名称或描述搜索关键词
+        include_deleted: 是否包含已删除记录（回收站）
+        start_date: 回测开始日期筛选（YYYY-MM-DD格式）
+        end_date: 回测结束日期筛选（YYYY-MM-DD格式）
+        initial_capital_min: 最小初始资金筛选
+        initial_capital_max: 最大初始资金筛选
+        return_rate_min: 最小收益率筛选（0.1表示10%）
+        return_rate_max: 最大收益率筛选（0.1表示10%）
         current_user: 当前用户
         service: 历史记录服务
 
@@ -130,6 +143,9 @@ async def get_history_list(
         - GET /api/backtest/history?skip=0&limit=20
         - GET /api/backtest/history?strategy_id=dual_ma&stock_code=000001.SZ
         - GET /api/backtest/history?search=双均线
+        - GET /api/backtest/history?start_date=2023-01-01&end_date=2023-12-31
+        - GET /api/backtest/history?initial_capital_min=100000&initial_capital_max=200000
+        - GET /api/backtest/history?return_rate_min=0.05&return_rate_max=0.2
     """
     try:
         user_id = current_user.get("sub", "default")
@@ -141,7 +157,13 @@ async def get_history_list(
             strategy_id=strategy_id,
             stock_code=stock_code,
             search=search,
-            include_deleted=include_deleted
+            include_deleted=include_deleted,
+            start_date=start_date,
+            end_date=end_date,
+            initial_capital_min=initial_capital_min,
+            initial_capital_max=initial_capital_max,
+            return_rate_min=return_rate_min,
+            return_rate_max=return_rate_max
         )
 
         return ok(data=result)
@@ -149,6 +171,43 @@ async def get_history_list(
     except Exception as e:
         logger.error(f"❌ 获取历史记录列表失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取历史记录列表失败: {str(e)}")
+
+
+@router.get("/history/stats", response_model=dict)
+async def get_history_stats(
+    current_user: dict = Depends(get_current_user),
+    service: HistoryService = Depends(get_history_service_instance)
+):
+    """
+    ✅ P2-4: 获取用户历史记录统计信息
+
+    返回当前用户的历史记录使用情况，包括：
+    - 当前记录数
+    - 上限（普通用户100，管理员500）
+    - 剩余可用空间
+    - 使用百分比
+    - 是否接近上限（超过80%）
+
+    Args:
+        current_user: 当前用户
+        service: 历史记录服务
+
+    Returns:
+        历史记录统计信息
+
+    示例：
+        - GET /api/backtest/history/stats
+    """
+    try:
+        user_id = current_user.get("sub", "default")
+
+        stats = await service.get_history_stats(user_id=user_id)
+
+        return ok(data=stats)
+
+    except Exception as e:
+        logger.error(f"❌ 获取历史记录统计失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取历史记录统计失败: {str(e)}")
 
 
 @router.get("/history/{record_id}", response_model=dict)

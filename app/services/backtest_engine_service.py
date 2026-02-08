@@ -268,6 +268,10 @@ class BacktestEngine:
         self.should_pause = False
         self.should_abort = False
 
+        # 回测参数（用于交易记录）
+        self.stock_code: str = ""
+        self.stock_name: str = ""
+
     async def execute_backtest(
         self,
         backtest_id: str,
@@ -282,6 +286,10 @@ class BacktestEngine:
         """
         try:
             logger.info(f"🚀 开始执行回测任务: {backtest_id}")
+
+            # 保存股票代码和名称（用于交易记录）
+            self.stock_code = parameters.get("stock_code", "")
+            self.stock_name = await self._get_stock_name(self.stock_code)
 
             # 1. 更新任务状态为运行中
             await self._update_task_status(backtest_id, "running")
@@ -400,6 +408,26 @@ class BacktestEngine:
         else:
             # 持有
             return {"action": "hold", "reason": "持有"}
+
+    async def _get_stock_name(self, stock_code: str) -> str:
+        """
+        获取股票名称
+
+        Args:
+            stock_code: 股票代码
+
+        Returns:
+            股票名称，如果查询失败则返回股票代码
+        """
+        try:
+            stock_info = await self.db.stock_info.find_one({"symbol": stock_code})
+            if stock_info and "name" in stock_info:
+                return stock_info["name"]
+        except Exception as e:
+            logger.warning(f"⚠️  获取股票名称失败: {stock_code}, 错误: {e}")
+
+        # 如果查询失败，返回股票代码作为名称
+        return stock_code
 
     async def _get_quotes(self, parameters: Dict[str, Any]) -> List[Dict]:
         """
@@ -536,6 +564,8 @@ class BacktestEngine:
             "backtest_id": backtest_id,
             "date": date,
             "trade_type": "buy",
+            "stock_code": self.stock_code,
+            "stock_name": self.stock_name,
             "price": price,
             "shares": shares,
             "amount": amount,
@@ -547,6 +577,7 @@ class BacktestEngine:
             "cash_after": state.cash,
             "position_before": position_before,
             "position_after": state.position,
+            "profit_loss": 0.0,  # 买入时盈亏为0
             "signal": signal,
             "created_at": datetime.now(timezone.utc)
         }
@@ -611,11 +642,17 @@ class BacktestEngine:
         cost_basis = state.sell_position(sell_shares)
         state.cash += amount - total_cost
 
+        # 计算盈亏金额
+        # 盈亏 = 卖出金额 - 手续费 - 成本基础
+        profit_loss = amount - total_cost - (cost_basis * sell_shares)
+
         # 记录交易
         trade_doc = {
             "backtest_id": backtest_id,
             "date": date,
             "trade_type": "sell",
+            "stock_code": self.stock_code,
+            "stock_name": self.stock_name,
             "price": price,
             "shares": sell_shares,
             "amount": amount,
@@ -628,6 +665,7 @@ class BacktestEngine:
             "position_before": position_before,
             "position_after": state.position,
             "cost_basis": cost_basis,
+            "profit_loss": profit_loss,  # 卖出时的盈亏
             "signal": signal,
             "created_at": datetime.now(timezone.utc)
         }

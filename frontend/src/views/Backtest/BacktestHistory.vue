@@ -53,6 +53,68 @@
           />
         </el-form-item>
 
+        <!-- ✅ 新增：时间区间筛选 -->
+        <el-form-item label="回测日期">
+          <el-date-picker
+            v-model="filterForm.dateRange"
+            type="daterange"
+            range-separator="至"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            value-format="YYYY-MM-DD"
+            clearable
+            style="width: 240px"
+          />
+        </el-form-item>
+
+        <!-- ✅ 新增：初始资金范围筛选 -->
+        <el-form-item label="初始资金">
+          <el-input
+            v-model="filterForm.initial_capital_min"
+            placeholder="最小值"
+            clearable
+            style="width: 100px"
+            type="number"
+          >
+            <template #append>元</template>
+          </el-input>
+          <span style="margin: 0 8px">-</span>
+          <el-input
+            v-model="filterForm.initial_capital_max"
+            placeholder="最大值"
+            clearable
+            style="width: 100px"
+            type="number"
+          >
+            <template #append>元</template>
+          </el-input>
+        </el-form-item>
+
+        <!-- ✅ 新增：收益率范围筛选 -->
+        <el-form-item label="收益率">
+          <el-input
+            v-model="filterForm.return_rate_min"
+            placeholder="最小值"
+            clearable
+            style="width: 100px"
+            type="number"
+            step="0.01"
+          >
+            <template #append>%</template>
+          </el-input>
+          <span style="margin: 0 8px">-</span>
+          <el-input
+            v-model="filterForm.return_rate_max"
+            placeholder="最大值"
+            clearable
+            style="width: 100px"
+            type="number"
+            step="0.01"
+          >
+            <template #append>%</template>
+          </el-input>
+        </el-form-item>
+
         <!-- 查询和重置按钮 -->
         <el-form-item>
           <el-button type="primary" @click="handleSearch" :loading="historyStore.listLoading">
@@ -77,6 +139,26 @@
         </el-form-item>
       </el-form>
     </el-card>
+
+    <!-- ✅ P2-4: 历史记录上限警告 -->
+    <el-alert
+      v-if="historyStats && historyStats.near_limit"
+      :type="historyStats.usage_percent >= 100 ? 'error' : 'warning'"
+      :closable="false"
+      class="limit-alert"
+      show-icon
+    >
+      <template #title>
+        <div class="alert-content">
+          <span>
+            历史记录即将达到上限（{{ historyStats.current_count }}/{{ historyStats.limit }}条，已使用{{ historyStats.usage_percent }}%）
+          </span>
+          <span style="margin-left: 16px; font-size: 13px; color: #666;">
+            {{ historyStats.user_type }}上限为{{ historyStats.limit }}条，剩余{{ historyStats.remaining }}条可用
+          </span>
+        </div>
+      </template>
+    </el-alert>
 
     <!-- 批量操作工具栏 -->
     <el-card v-if="historyStore.hasBatchSelection" class="toolbar-card" shadow="never">
@@ -476,11 +558,27 @@ import BacktestResults from '@/components/BacktestResults.vue'
 // Store
 const historyStore = useBacktestHistoryStore()
 
+// ✅ P2-4: 历史记录统计信息
+const historyStats = ref<{
+  current_count: number
+  limit: number
+  remaining: number
+  usage_percent: number
+  near_limit: boolean
+  is_admin: boolean
+  user_type: string
+} | null>(null)
+
 // 筛选表单
 const filterForm = ref({
   search: '',
   strategy_id: '',
-  stock_code: ''
+  stock_code: '',
+  dateRange: null as [string, string] | null,  // ✅ 新增：时间区间
+  initial_capital_min: '',  // ✅ 新增：最小初始资金
+  initial_capital_max: '',  // ✅ 新增：最大初始资金
+  return_rate_min: '',      // ✅ 新增：最小收益率
+  return_rate_max: ''       // ✅ 新增：最大收益率
 })
 
 // 对话框状态
@@ -516,7 +614,15 @@ const canBatchRestore = computed(() => {
 
 // 查询历史记录
 const handleSearch = async () => {
-  historyStore.updateFilters(filterForm.value)
+  // 处理dateRange转换为start_date和end_date
+  const filtersToUpdate = {
+    ...filterForm.value,
+    start_date: filterForm.value.dateRange?.[0] || '',
+    end_date: filterForm.value.dateRange?.[1] || ''
+  }
+  delete filtersToUpdate.dateRange  // 移除dateRange字段
+
+  historyStore.updateFilters(filtersToUpdate)
   await historyStore.fetchHistoryList(true)
 }
 
@@ -525,10 +631,34 @@ const handleReset = async () => {
   filterForm.value = {
     search: '',
     strategy_id: '',
-    stock_code: ''
+    stock_code: '',
+    dateRange: null,
+    initial_capital_min: '',
+    initial_capital_max: '',
+    return_rate_min: '',
+    return_rate_max: ''
   }
   historyStore.resetFilters()
   await historyStore.fetchHistoryList(true)
+}
+
+// ✅ P2-4: 获取历史记录统计信息
+const fetchHistoryStats = async () => {
+  try {
+    const response = await fetch('/api/backtest/history/stats', {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      }
+    })
+    if (response.ok) {
+      const result = await response.json()
+      if (result.success) {
+        historyStats.value = result.data
+      }
+    }
+  } catch (error) {
+    console.error('获取历史记录统计失败:', error)
+  }
 }
 
 // 切换回收站视图
@@ -717,6 +847,8 @@ const getSharpeClass = (value: number) => {
 // 初始化
 onMounted(async () => {
   await historyStore.fetchHistoryList(true)
+  // ✅ P2-4: 加载历史记录统计信息
+  await fetchHistoryStats()
 })
 </script>
 
@@ -745,6 +877,17 @@ onMounted(async () => {
 
   .filter-card {
     margin-bottom: 20px;
+  }
+
+  // ✅ P2-4: 上限警告样式
+  .limit-alert {
+    margin-bottom: 20px;
+
+    .alert-content {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+    }
   }
 
   .toolbar-card {

@@ -57,6 +57,10 @@ class InvalidComparisonError(HistoryServiceError):
 class HistoryService:
     """回测历史记录管理服务（增强版）"""
 
+    # ✅ P2-4: 历史记录上限常量
+    MAX_HISTORY_NORMAL = 100  # 普通用户最大记录数
+    MAX_HISTORY_ADMIN = 500   # 管理员最大记录数
+
     def __init__(self, db: AsyncIOMotorDatabase):
         """
         初始化历史记录服务
@@ -65,6 +69,84 @@ class HistoryService:
             db: MongoDB数据库实例
         """
         self.db = db
+
+    async def _check_and_enforce_limit(
+        self,
+        user_id: str
+    ) -> Dict[str, Any]:
+        """
+        ✅ P2-4: 检查并强制执行历史记录上限
+
+        如果用户的历史记录数量达到上限，自动删除最旧的记录
+
+        Args:
+            user_id: 用户ID
+
+        Returns:
+            包含删除记录信息的字典
+        """
+        try:
+            # 1. 获取用户信息（判断是否为管理员）
+            user = await self.db.users.find_one({"username": user_id})
+            is_admin = user.get("is_admin", False) if user else False
+
+            # 2. 确定该用户的上限
+            limit = self.MAX_HISTORY_ADMIN if is_admin else self.MAX_HISTORY_NORMAL
+
+            # 3. 统计当前有效记录数（不包括已删除的）
+            current_count = await self.db.backtest_history.count_documents({
+                "user_id": user_id,
+                "is_deleted": False
+            })
+
+            logger.info(f"📊 用户 {user_id} 当前记录数: {current_count}, 上限: {limit}")
+
+            # 4. 如果达到上限，删除最旧的记录
+            if current_count >= limit:
+                # 查找最旧的记录
+                oldest_record = await self.db.backtest_history.find_one({
+                    "user_id": user_id,
+                    "is_deleted": False
+                }, sort=[("created_at", 1)])
+
+                if oldest_record:
+                    # 软删除该记录
+                    await self.db.backtest_history.update_one(
+                        {"_id": oldest_record["_id"]},
+                        {
+                            "$set": {
+                                "is_deleted": True,
+                                "deleted_at": datetime.now(timezone.utc),
+                                "delete_reason": "auto_delete_limit_exceeded"
+                            }
+                        }
+                    )
+
+                    logger.info(f"🗑️  自动删除最旧记录: {oldest_record['record_id']} (用户: {user_id})")
+
+                    return {
+                        "deleted": True,
+                        "deleted_record_id": oldest_record["record_id"],
+                        "deleted_record_name": oldest_record["name"],
+                        "current_count": current_count - 1,
+                        "limit": limit,
+                        "is_admin": is_admin
+                    }
+
+            return {
+                "deleted": False,
+                "current_count": current_count,
+                "limit": limit,
+                "is_admin": is_admin
+            }
+
+        except Exception as e:
+            logger.error(f"❌ 检查历史记录上限失败: {e}", exc_info=True)
+            # 检查失败时不阻止保存操作
+            return {
+                "deleted": False,
+                "error": str(e)
+            }
 
     async def save_to_history(
         self,
@@ -112,7 +194,10 @@ class HistoryService:
                 "total_trades": result.get("trading_stats", {}).get("total_trades", 0)
             }
 
-            # 5. 构建历史记录文档（增加软删除支持）
+            # 5. ✅ P2-4: 检查历史记录上限（自动删除最旧记录）
+            limit_check = await self._check_and_enforce_limit(user_id)
+
+            # 6. 构建历史记录文档（增加软删除支持）
             history_doc = {
                 "record_id": record_id,
                 "user_id": user_id,
@@ -128,22 +213,84 @@ class HistoryService:
                 "updated_at": datetime.now(timezone.utc)
             }
 
-            # 6. 插入数据库
+            # 7. 插入数据库
             await self.db.backtest_history.insert_one(history_doc)
 
             logger.info(f"✅ 历史记录已保存: {record_id}")
 
-            return {
+            # ✅ P2-4: 返回上限检查信息
+            response_data = {
                 "record_id": record_id,
                 "name": name,
                 "message": "已保存到历史记录"
             }
+
+            # 如果有自动删除,添加警告信息
+            if limit_check.get("deleted"):
+                response_data["warning"] = f"已达到上限({limit_check['limit']}条),自动删除最旧记录: {limit_check['deleted_record_name']}"
+                response_data["deleted_record_id"] = limit_check["deleted_record_id"]
+                response_data["current_count"] = limit_check["current_count"] + 1  # 加1是因为刚插入了新记录
+                response_data["limit"] = limit_check["limit"]
+
+            return response_data
 
         except BacktestResultNotFoundError:
             raise
         except Exception as e:
             logger.error(f"❌ 保存历史记录失败: {e}", exc_info=True)
             raise HistoryServiceError(f"保存历史记录失败: {str(e)}")
+
+    async def get_history_stats(
+        self,
+        user_id: str = "default"
+    ) -> Dict[str, Any]:
+        """
+        ✅ P2-4: 获取用户历史记录统计信息
+
+        Args:
+            user_id: 用户ID
+
+        Returns:
+            历史记录统计信息（当前数量、上限、是否接近上限等）
+        """
+        try:
+            # 1. 获取用户信息（判断是否为管理员）
+            user = await self.db.users.find_one({"username": user_id})
+            is_admin = user.get("is_admin", False) if user else False
+
+            # 2. 确定该用户的上限
+            limit = self.MAX_HISTORY_ADMIN if is_admin else self.MAX_HISTORY_NORMAL
+
+            # 3. 统计当前有效记录数（不包括已删除的）
+            current_count = await self.db.backtest_history.count_documents({
+                "user_id": user_id,
+                "is_deleted": False
+            })
+
+            # 4. 计算使用百分比
+            usage_percent = (current_count / limit) * 100 if limit > 0 else 0
+
+            # 5. 判断是否接近上限（超过80%）
+            near_limit = usage_percent >= 80
+
+            # 6. 计算剩余可用空间
+            remaining = max(0, limit - current_count)
+
+            logger.info(f"📊 用户 {user_id} 历史记录统计: {current_count}/{limit} ({usage_percent:.1f}%)")
+
+            return {
+                "current_count": current_count,
+                "limit": limit,
+                "remaining": remaining,
+                "usage_percent": round(usage_percent, 1),
+                "near_limit": near_limit,
+                "is_admin": is_admin,
+                "user_type": "管理员" if is_admin else "普通用户"
+            }
+
+        except Exception as e:
+            logger.error(f"❌ 获取历史记录统计失败: {e}", exc_info=True)
+            raise HistoryServiceError(f"获取历史记录统计失败: {str(e)}")
 
     async def get_history_list(
         self,
@@ -153,10 +300,16 @@ class HistoryService:
         strategy_id: Optional[str] = None,
         stock_code: Optional[str] = None,
         search: Optional[str] = None,
-        include_deleted: bool = False
+        include_deleted: bool = False,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        initial_capital_min: Optional[float] = None,
+        initial_capital_max: Optional[float] = None,
+        return_rate_min: Optional[float] = None,
+        return_rate_max: Optional[float] = None
     ) -> Dict[str, Any]:
         """
-        获取历史记录列表（性能优化版本）
+        获取历史记录列表（增强版：支持日期范围、资金范围、收益率范围筛选）
 
         Args:
             user_id: 用户ID
@@ -166,6 +319,12 @@ class HistoryService:
             stock_code: 股票代码筛选（可选）
             search: 关键词搜索（可选）
             include_deleted: 是否包含已删除记录（用于回收站）
+            start_date: 回测开始日期筛选（可选，YYYY-MM-DD格式）
+            end_date: 回测结束日期筛选（可选，YYYY-MM-DD格式）
+            initial_capital_min: 最小初始资金筛选（可选）
+            initial_capital_max: 最大初始资金筛选（可选）
+            return_rate_min: 最小收益率筛选（可选，0.1表示10%）
+            return_rate_max: 最大收益率筛选（可选，0.1表示10%）
 
         Returns:
             历史记录列表和总数
@@ -189,6 +348,33 @@ class HistoryService:
                     {"name": {"$regex": search, "$options": "i"}},
                     {"description": {"$regex": search, "$options": "i"}}
                 ]
+
+            # ✅ 新增：时间区间筛选
+            if start_date:
+                query["parameters.start_date"] = {"$gte": start_date}
+            if end_date:
+                if "parameters.start_date" in query:
+                    query["parameters.start_date"]["$lte"] = end_date
+                else:
+                    query["parameters.start_date"] = {"$lte": end_date}
+
+            # ✅ 新增：初始资金范围筛选
+            if initial_capital_min is not None:
+                query["parameters.initial_capital"] = {"$gte": initial_capital_min}
+            if initial_capital_max is not None:
+                if "parameters.initial_capital" in query:
+                    query["parameters.initial_capital"]["$lte"] = initial_capital_max
+                else:
+                    query["parameters.initial_capital"] = {"$lte": initial_capital_max}
+
+            # ✅ 新增：收益率范围筛选
+            if return_rate_min is not None:
+                query["metrics_snapshot.total_return"] = {"$gte": return_rate_min}
+            if return_rate_max is not None:
+                if "metrics_snapshot.total_return" in query:
+                    query["metrics_snapshot.total_return"]["$lte"] = return_rate_max
+                else:
+                    query["metrics_snapshot.total_return"] = {"$lte": return_rate_max}
 
             # 查询总数
             total = await self.db.backtest_history.count_documents(query)

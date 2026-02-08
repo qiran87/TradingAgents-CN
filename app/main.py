@@ -45,6 +45,7 @@ from app.routers import backtest_stock_data_v2 as backtest_stock_data_router
 from app.routers import backtest_engine as backtest_engine_router
 from app.routers import backtest_history as backtest_history_router
 from app.routers import backtest_export as backtest_export_router
+from app.routers import saved_params as saved_params_router
 from app.services.basics_sync_service import get_basics_sync_service
 from app.services.multi_source_basics_sync_service import MultiSourceBasicsSyncService
 from app.services.scheduler_service import set_scheduler_instance
@@ -779,6 +780,7 @@ app.include_router(backtest_stock_data_router.router, tags=["backtest-stock-data
 app.include_router(backtest_engine_router.router, tags=["backtest-engine"])
 app.include_router(backtest_history_router.router, tags=["backtest-history"])
 app.include_router(backtest_export_router.router, tags=["backtest-export"])
+app.include_router(saved_params_router.router, tags=["backtest-saved-params"])
 app.include_router(tushare_init.router, prefix="/api", tags=["tushare-init"])
 app.include_router(akshare_init.router, prefix="/api", tags=["akshare-init"])
 app.include_router(baostock_init.router, prefix="/api", tags=["baostock-init"])

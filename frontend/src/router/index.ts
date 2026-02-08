@@ -207,27 +207,27 @@ const routes: RouteRecordRaw[] = [
     name: 'Backtest',
     component: () => import('@/layouts/BasicLayout.vue'),
     meta: {
-      title: '回测管理',
+      title: '股票回测',
       icon: 'TrendCharts',
       requiresAuth: true,
       transition: 'slide-up'
     },
     children: [
       {
-        path: 'strategies',
-        name: 'BacktestStrategies',
-        component: () => import('@/views/Backtest/StrategyList.vue'),
-        meta: {
-          title: '策略管理',
-          requiresAuth: true
-        }
-      },
-      {
         path: 'control',
         name: 'BacktestControl',
         component: () => import('@/views/Backtest/BacktestControlPanel.vue'),
         meta: {
-          title: '回测控制',
+          title: '执行股票回测',
+          requiresAuth: true
+        }
+      },
+      {
+        path: 'strategies',
+        name: 'BacktestStrategies',
+        component: () => import('@/views/Backtest/StrategyList.vue'),
+        meta: {
+          title: '回测策略列表',
           requiresAuth: true
         }
       },
@@ -236,7 +236,7 @@ const routes: RouteRecordRaw[] = [
         name: 'BacktestHistory',
         component: () => import('@/views/Backtest/BacktestHistory.vue'),
         meta: {
-          title: '历史记录',
+          title: '历史回测汇总',
           requiresAuth: true
         }
       }

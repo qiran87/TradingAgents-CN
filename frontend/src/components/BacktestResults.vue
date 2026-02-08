@@ -236,35 +236,55 @@
           <el-table
             :data="paginatedTrades"
             stripe
-            max-height="400"
+            max-height="450"
             v-loading="tradesLoading"
             style="width: 100%"
           >
-            <el-table-column prop="date" label="日期" width="120" />
-            <el-table-column label="类型" width="80">
+            <el-table-column prop="date" label="日期" width="110" fixed />
+            <el-table-column label="类型" width="70" fixed>
               <template #default="{ row }">
                 <el-tag :type="row.trade_type === 'buy' ? 'success' : 'danger'" size="small">
                   {{ row.trade_type === 'buy' ? '买入' : '卖出' }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="price" label="成交价" width="100">
+            <el-table-column prop="stock_code" label="股票代码" width="110" />
+            <el-table-column prop="stock_name" label="股票名称" width="120" />
+            <el-table-column prop="price" label="成交价" width="90">
               <template #default="{ row }">
                 ¥{{ row.price.toFixed(2) }}
               </template>
             </el-table-column>
-            <el-table-column prop="shares" label="数量" width="100" />
-            <el-table-column prop="amount" label="成交额" width="120">
+            <el-table-column prop="shares" label="数量" width="80" />
+            <el-table-column prop="amount" label="成交额" width="110">
               <template #default="{ row }">
                 ¥{{ row.amount.toFixed(2) }}
               </template>
             </el-table-column>
-            <el-table-column prop="total_cost" label="手续费" width="100">
+            <el-table-column label="佣金" width="90">
               <template #default="{ row }">
-                ¥{{ row.total_cost.toFixed(2) }}
+                ¥{{ (row.commission || 0).toFixed(2) }}
               </template>
             </el-table-column>
-            <el-table-column prop="cash_after" label="交易后现金" width="130">
+            <el-table-column label="印花税" width="90">
+              <template #default="{ row }">
+                ¥{{ (row.stamp_duty || 0).toFixed(2) }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="cash_before" label="交易前现金" width="120">
+              <template #default="{ row }">
+                ¥{{ row.cash_before.toFixed(2) }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="position_before" label="交易前持仓" width="100" />
+            <el-table-column label="盈亏金额" width="110">
+              <template #default="{ row }">
+                <span :style="{ color: getProfitLossColor(row.profit_loss, row.trade_type) }">
+                  {{ row.trade_type === 'buy' ? '-' : (row.profit_loss >= 0 ? '+' : '') }}¥{{ (row.profit_loss || 0).toFixed(2) }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="cash_after" label="交易后现金" width="120">
               <template #default="{ row }">
                 ¥{{ row.cash_after.toFixed(2) }}
               </template>
@@ -385,6 +405,20 @@ const handlePageChange = (page: number) => {
   const tradesCard = document.querySelector('.trades-card')
   if (tradesCard) {
     tradesCard.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+}
+
+// 获取盈亏金额显示颜色
+const getProfitLossColor = (profitLoss: number, tradeType: string) => {
+  if (tradeType === 'buy') {
+    return '#999' // 买入时显示灰色
+  }
+  if (profitLoss > 0) {
+    return '#67C23A' // 盈利显示绿色
+  } else if (profitLoss < 0) {
+    return '#F56C6C' // 亏损显示红色
+  } else {
+    return '#999' // 不盈不亏显示灰色
   }
 }
 
