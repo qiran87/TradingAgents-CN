@@ -1063,10 +1063,10 @@ onUnmounted(() => {
     }
   }
 
-  // 右侧核心操作栏（80%）
+  // 右侧核心操作栏（70%）
   .right-main {
-    width: 80%;
-    margin-left: 20%;
+    width: 70%;
+    margin-left: 25%;
     padding: 20px;
 
     .config-card,
