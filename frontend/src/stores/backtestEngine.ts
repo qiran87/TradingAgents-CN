@@ -3,6 +3,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { ElMessage } from 'element-plus'
 import { backtestEngineApi } from '@/api/backtestEngine'
 import type {
   StartBacktestRequest,
@@ -43,6 +44,9 @@ export const useBacktestEngineStore = defineStore('backtestEngine', () => {
 
   // 心跳定时器
   let heartbeatTimer: number | null = null
+
+  // 状态轮询定时器
+  let statusPollingTimer: number | null = null
 
   // ===================== 计算属性 =====================
 
@@ -93,6 +97,9 @@ export const useBacktestEngineStore = defineStore('backtestEngine', () => {
 
       // 连接WebSocket
       connectWebSocket(response.data.backtest_id)
+
+      // 启动状态轮询(作为WebSocket的备用机制)
+      startStatusPolling(response.data.backtest_id)
 
       return response.data
     } catch (error: any) {
@@ -306,6 +313,96 @@ export const useBacktestEngineStore = defineStore('backtestEngine', () => {
   }
 
   /**
+   * 启动状态轮询
+   */
+  function startStatusPolling(backtestId: string) {
+    stopStatusPolling()
+
+    console.log('[BacktestEngine] 启动状态轮询:', backtestId)
+
+    // 立即查询一次状态
+    fetchBacktestStatus(backtestId).catch(err => {
+      console.warn('[BacktestEngine] 首次状态查询失败:', err)
+    })
+
+    // 每2秒轮询一次状态
+    statusPollingTimer = window.setInterval(async () => {
+      try {
+        const status = await fetchBacktestStatus(backtestId)
+
+        // 如果回测已完成,自动保存到历史记录并停止轮询
+        if (status?.status === 'completed') {
+          console.log('[BacktestEngine] 回测完成,自动保存到历史记录')
+          stopStatusPolling()
+          disconnectWebSocket()
+
+          // 自动保存到历史记录
+          await autoSaveToHistory(backtestId, status)
+        }
+        // 如果回测失败,停止轮询
+        else if (status?.status === 'failed') {
+          console.log('[BacktestEngine] 回测失败,停止轮询:', status.status)
+          stopStatusPolling()
+          disconnectWebSocket()
+        }
+      } catch (error) {
+        console.error('[BacktestEngine] 状态轮询失败:', error)
+      }
+    }, 2000)
+  }
+
+  /**
+   * 自动保存到历史记录
+   */
+  async function autoSaveToHistory(backtestId: string, status: BacktestStatus) {
+    try {
+      // 导入历史记录 store
+      const { useBacktestHistoryStore } = await import('@/stores/backtestHistory')
+      const historyStore = useBacktestHistoryStore()
+
+      // 生成默认名称
+      const parameters = status.parameters || {}
+      const stockCode = parameters.stock_code || '未知股票'
+      const strategyId = parameters.strategy_id || '未知策略'
+      const startDate = parameters.start_date || ''
+      const endDate = parameters.end_date || ''
+
+      const defaultName = `${stockCode} ${strategyId} ${startDate}至${endDate}`
+
+      // 自动保存
+      await historyStore.saveToHistory(backtestId, {
+        name: defaultName,
+        description: '自动保存的回测结果',
+        tags: ['自动保存']
+      })
+
+      console.log('[BacktestEngine] 已自动保存到历史记录:', defaultName)
+
+      // 显示提示
+      if (typeof ElMessage !== 'undefined') {
+        ElMessage.success({
+          message: `回测完成!已自动保存到历史记录: ${defaultName}`,
+          duration: 5000
+        })
+      }
+    } catch (error) {
+      console.error('[BacktestEngine] 自动保存到历史记录失败:', error)
+      // 自动保存失败不影响用户体验,只记录错误
+    }
+  }
+
+  /**
+   * 停止状态轮询
+   */
+  function stopStatusPolling() {
+    if (statusPollingTimer) {
+      clearInterval(statusPollingTimer)
+      statusPollingTimer = null
+      console.log('[BacktestEngine] 状态轮询已停止')
+    }
+  }
+
+  /**
    * 重置状态
    */
   function resetState() {
@@ -322,6 +419,7 @@ export const useBacktestEngineStore = defineStore('backtestEngine', () => {
    * 清理资源
    */
   function cleanup() {
+    stopStatusPolling()
     disconnectWebSocket()
     resetState()
   }
@@ -362,11 +460,13 @@ export const useBacktestEngineStore = defineStore('backtestEngine', () => {
     startBacktest,
     interruptBacktest,
     continueBacktest,
-    fetchBacktestStatus,
     abortBacktest,
+    fetchBacktestStatus,
     connectWebSocket,
     disconnectWebSocket,
-    resetState,
-    cleanup
+    startStatusPolling,
+    stopStatusPolling,
+    cleanup,
+    resetState
   }
 })

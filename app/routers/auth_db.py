@@ -103,7 +103,8 @@ async def get_current_user(authorization: Optional[str] = Header(default=None)) 
     logger.debug(f"✅ 认证成功，用户: {token_data.sub}")
 
     # 返回完整的用户信息，包括偏好设置
-    return {
+    user_info = {
+        "sub": token_data.sub,  # 添加 sub 字段 (JWT 标准字段,存储用户唯一标识)
         "id": str(user.id),
         "username": user.username,
         "email": user.email,
@@ -112,6 +113,11 @@ async def get_current_user(authorization: Optional[str] = Header(default=None)) 
         "roles": ["admin"] if user.is_admin else ["user"],
         "preferences": user.preferences.model_dump() if user.preferences else {}
     }
+
+    # 调试日志:输出返回的用户信息
+    logger.info(f"🔍 get_current_user 返回: {user_info}")
+
+    return user_info
 
 @router.post("/login")
 async def login(payload: LoginRequest, request: Request):

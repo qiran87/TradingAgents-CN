@@ -992,5 +992,7 @@ async def execute_backtest_task(backtest_id: str, parameters: Dict[str, Any]):
         backtest_id: 回测任务ID
         parameters: 回测参数
     """
-    engine = get_backtest_engine_service()
+    # 每次都创建新的引擎实例,避免后台任务上下文问题
+    db = get_mongo_db()
+    engine = BacktestEngine(db)
     await engine.execute_backtest(backtest_id, parameters)

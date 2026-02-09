@@ -55,9 +55,55 @@ else
     echo "   如需停止，请运行: docker-compose stop mongodb redis"
 fi
 
-# 3. 清理端口占用提示
+# 3. 等待进程完全结束并清除Python缓存
 echo ""
-echo "🔍 [3/3] 检查端口占用..."
+echo "⏳ [3/4] 等待进程完全结束..."
+sleep 3
+
+# 确认进程已停止
+REMAINING_BACKEND=$(pgrep -f "python -m app" || true)
+REMAINING_FRONTEND=$(pgrep -f "npm run dev" || true)
+
+if [ -n "$REMAINING_BACKEND" ] || [ -n "$REMAINING_FRONTEND" ]; then
+    echo "⚠️  发现残留进程，强制停止..."
+    pkill -9 -f "python -m app" 2>/dev/null || true
+    pkill -9 -f "npm run dev" 2>/dev/null || true
+    sleep 2
+fi
+
+echo "✅ 所有进程已完全结束"
+
+# 4. 清除Python缓存
+echo ""
+echo "🧹 [4/4] 清除Python缓存..."
+
+# 统计缓存数量
+CACHE_DIRS=$(find "$PROJECT_DIR/app" -type d -name "__pycache__" 2>/dev/null | wc -l)
+CACHE_FILES=$(find "$PROJECT_DIR/app" -name "*.pyc" 2>/dev/null | wc -l)
+
+if [ "$CACHE_DIRS" -gt 0 ] || [ "$CACHE_FILES" -gt 0 ]; then
+    echo "   发现 $CACHE_DIRS 个缓存目录和 $CACHE_FILES 个缓存文件"
+
+    # 删除缓存目录和文件
+    find "$PROJECT_DIR/app" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
+    find "$PROJECT_DIR/app" -name "*.pyc" -delete 2>/dev/null
+
+    # 验证清除结果
+    REMAINING_DIRS=$(find "$PROJECT_DIR/app" -type d -name "__pycache__" 2>/dev/null | wc -l)
+    REMAINING_FILES=$(find "$PROJECT_DIR/app" -name "*.pyc" 2>/dev/null | wc -l)
+
+    if [ "$REMAINING_DIRS" -eq 0 ] && [ "$REMAINING_FILES" -eq 0 ]; then
+        echo "✅ Python缓存已彻底清除"
+    else
+        echo "⚠️  部分缓存未能清除: $REMAINING_DIRS 个目录, $REMAINING_FILES 个文件"
+    fi
+else
+    echo "ℹ️  未发现Python缓存文件"
+fi
+
+# 5. 清理端口占用提示
+echo ""
+echo "🔍 [5/5] 检查端口占用..."
 PORTS_IN_USE=""
 
 if lsof -ti:8000 > /dev/null 2>&1; then
@@ -81,6 +127,7 @@ echo "✅ 停止完成！"
 echo "=================================="
 echo ""
 echo "💡 提示："
+echo "   - Python缓存已清除，确保代码修改生效"
 echo "   - 数据库服务可能仍在运行（保留数据以便下次快速启动）"
 echo "   - 完全停止数据库: docker-compose stop mongodb redis"
 echo "   - 重新启动所有服务: ./start.sh"

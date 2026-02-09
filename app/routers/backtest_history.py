@@ -148,7 +148,10 @@ async def get_history_list(
         - GET /api/backtest/history?return_rate_min=0.05&return_rate_max=0.2
     """
     try:
+        # 使用JWT sub字段作为user_id
         user_id = current_user.get("sub", "default")
+
+        logger.info(f"🔍 获取历史记录列表 - user_id: {user_id}")
 
         result = await service.get_history_list(
             user_id=user_id,

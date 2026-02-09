@@ -71,7 +71,8 @@ async def start_backtest(
     request: StartBacktestRequest,
     background_tasks: BackgroundTasks,
     db = Depends(get_mongo_db),
-    service: BacktestEngine = Depends(get_backtest_engine_service)
+    service: BacktestEngine = Depends(get_backtest_engine_service),
+    current_user: dict = Depends(get_current_user)
 ):
     """
     启动回测任务
@@ -95,10 +96,17 @@ async def start_backtest(
             "strategy_params": request.strategy_params
         }
 
-        # 3. 创建任务文档
+        # 3. 获取用户ID (使用JWT sub字段)
+        user_id = current_user.get("sub", "default")
+
+        # 调试日志:输出当前用户信息
+        logger.info(f"🔍 当前用户信息: {current_user}")
+        logger.info(f"🔍 提取的 user_id: {user_id}")
+
+        # 4. 创建任务文档
         task_doc = {
             "backtest_id": backtest_id,
-            "user_id": "default",  # 当前版本不区分用户
+            "user_id": user_id,
             "status": "created",
             "parameters": parameters,
             "execution_info": {
