@@ -10,6 +10,7 @@ import asyncio
 
 from app.core.database import get_mongo_db, get_redis_client
 from app.services.websocket_manager import get_websocket_manager
+from app.strategies.dual_ma import DualMAStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +140,8 @@ class BacktestState:
         backtest_id: str,
         initial_capital: float,
         quotes: List[Dict],
-        trading_days: List[str]
+        trading_days: List[str],
+        parameters: Dict[str, Any] = None
     ):
         self.backtest_id = backtest_id
         self.initial_capital = initial_capital
@@ -148,6 +150,7 @@ class BacktestState:
         self.position_cost = 0.0  # 平均持仓成本
         self.quotes = quotes
         self.trading_days = trading_days
+        self.parameters = parameters or {}  # 回测参数(包含策略参数等)
 
         # T+1规则：持仓批次列表
         # 每个批次记录买入日期、股数、成本
@@ -308,7 +311,8 @@ class BacktestEngine:
                 backtest_id=backtest_id,
                 initial_capital=parameters["initial_capital"],
                 quotes=quotes,
-                trading_days=trading_days
+                trading_days=trading_days,
+                parameters=parameters  # 传入完整参数,供策略使用
             )
 
             # 4. 执行回测循环
@@ -383,9 +387,9 @@ class BacktestEngine:
         bar_index: int
     ) -> Dict[str, Any]:
         """
-        执行示例策略（双均线策略）
+        执行双均线策略
 
-        这是一个简化的示例策略，实际应该从策略服务获取
+        使用真正的DualMAStrategy进行回测
 
         Args:
             state: 回测状态
@@ -396,18 +400,36 @@ class BacktestEngine:
         Returns:
             交易信号
         """
-        # 简单的示例策略：
-        # - 前20个交易日不交易
-        # - 20日后，如果持仓为0则买入，持仓不为0则继续持有
-        if bar_index < 20:
-            return {"action": "hold", "reason": "数据积累期"}
+        # 初始化策略(如果还没有初始化)
+        if not hasattr(self, 'strategy'):
+            # 获取策略参数
+            strategy_params = state.parameters.get('strategy_params', {})
 
-        if state.position == 0:
-            # 买入信号
-            return {"action": "buy", "reason": "初始买入"}
-        else:
-            # 持有
-            return {"action": "hold", "reason": "持有"}
+            # 兼容不同的参数名称
+            short_window = strategy_params.get('short_window',
+                           strategy_params.get('short_period', 5))
+            long_window = strategy_params.get('long_window',
+                           strategy_params.get('long_period', 20))
+
+            # 初始化双均线策略
+            params = {
+                'short_window': short_window,
+                'long_window': long_window
+            }
+            self.strategy = DualMAStrategy(params)
+            logger.info(f"✅ 初始化双均线策略: short_window={short_window}, long_window={long_window}")
+
+        # 调用策略生成信号
+        timestamp = datetime.strptime(date, '%Y-%m-%d')
+        signal = self.strategy.on_bar(
+            bar_id=f"{date}_{bar_index}",
+            timestamp=timestamp,
+            current_price=quote['close'],
+            position=state.position,
+            cash=state.cash
+        )
+
+        return signal
 
     async def _get_stock_name(self, stock_code: str) -> str:
         """
