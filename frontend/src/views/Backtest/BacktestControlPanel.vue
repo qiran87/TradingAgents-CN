@@ -1,45 +1,17 @@
 <template>
   <div class="backtest-control-panel">
-    <!-- 顶部区域（固定） -->
-    <div class="page-header-fixed">
-      <div class="header-left">
-        <h1 class="page-title">
-          <el-icon><TrendCharts /></el-icon>
-          股票回测
-        </h1>
-      </div>
-      <div class="header-right">
-        <el-button @click="handleResetParams" :icon="RefreshLeft">
-          重置所有参数
-        </el-button>
-        <el-dropdown @command="handleLoadSavedParams" trigger="click">
-          <el-button :icon="Star">
-            我的常用参数
-            <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-          </el-button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item v-if="savedParamsList.length === 0" disabled>
-                暂无保存的参数
-              </el-dropdown-item>
-              <el-dropdown-item
-                v-for="item in savedParamsList"
-                :key="item.id"
-                :command="item.id"
-              >
-                {{ item.name }}
-              </el-dropdown-item>
-              <el-dropdown-item divided :command="'save'" v-if="canSaveParams">
-                <el-icon><Plus /></el-icon>
-                保存当前参数
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-      </div>
+    <!-- 页面头部 -->
+    <div class="page-header">
+      <h1 class="page-title">
+        <el-icon><TrendCharts /></el-icon>
+        股票回测
+      </h1>
+      <p class="page-description">
+        设置回测参数、选择策略并执行回测任务
+      </p>
     </div>
 
-    <!-- 主体区域（左2右8布局） -->
+    <!-- 主体区域（左20%右80%布局） -->
     <div class="main-content">
       <!-- 左侧辅助信息栏（20%） -->
       <div class="left-sidebar">
@@ -74,6 +46,45 @@
             <div v-if="currentStatusDetail" class="status-detail">
               {{ currentStatusDetail }}
             </div>
+          </div>
+        </el-card>
+
+        <!-- 快捷操作 -->
+        <el-card class="actions-card" shadow="never">
+          <template #header>
+            <span class="card-title">
+              <el-icon><Setting /></el-icon>
+              快捷操作
+            </span>
+          </template>
+          <div class="actions-content">
+            <el-button @click="handleResetParams" :icon="RefreshLeft" style="width: 100%; margin-bottom: 8px;">
+              重置所有参数
+            </el-button>
+            <el-dropdown @command="handleLoadSavedParams" trigger="click" style="width: 100%;">
+              <el-button :icon="Star" style="width: 100%;">
+                我的常用参数
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item v-if="savedParamsList.length === 0" disabled>
+                    暂无保存的参数
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-for="item in savedParamsList"
+                    :key="item.id"
+                    :command="item.id"
+                  >
+                    {{ item.name }}
+                  </el-dropdown-item>
+                  <el-dropdown-item divided :command="'save'" v-if="canSaveParams">
+                    <el-icon><Plus /></el-icon>
+                    保存当前参数
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </el-card>
       </div>
@@ -183,25 +194,32 @@
                 </el-form-item>
               </el-form>
 
-              <!-- 策略列表 -->
-              <el-radio-group v-model="form.strategy_id" class="strategy-list">
-                <el-radio
-                  v-for="strategy in filteredStrategies"
-                  :key="strategy.id"
-                  :label="strategy.id"
-                  border
-                  class="strategy-item"
+              <!-- 策略选择下拉框 -->
+              <el-form-item label="选择策略">
+                <el-select
+                  v-model="form.strategy_id"
+                  placeholder="请选择策略"
+                  filterable
+                  clearable
+                  style="width: 100%"
                 >
-                  <div class="strategy-item-content">
-                    <div class="strategy-name">
-                      {{ strategy.name }}
-                      <el-tag v-if="strategy.is_builtin" type="info" size="small">内置</el-tag>
-                      <el-tag v-else type="warning" size="small">自定义</el-tag>
+                  <el-option
+                    v-for="strategy in filteredStrategies"
+                    :key="strategy.id"
+                    :label="strategy.name"
+                    :value="strategy.id"
+                  >
+                    <div class="strategy-option">
+                      <div class="strategy-option-name">
+                        {{ strategy.name }}
+                        <el-tag v-if="strategy.is_builtin" type="info" size="small">内置</el-tag>
+                        <el-tag v-else type="warning" size="small">自定义</el-tag>
+                      </div>
+                      <div class="strategy-option-desc">{{ strategy.description }}</div>
                     </div>
-                    <div class="strategy-desc">{{ strategy.description }}</div>
-                  </div>
-                </el-radio>
-              </el-radio-group>
+                  </el-option>
+                </el-select>
+              </el-form-item>
             </el-col>
 
             <el-col :span="12">
@@ -528,7 +546,8 @@
     <el-dialog
       v-model="showHelpDialog"
       title="帮助文档"
-      width="900px"
+      width="650px"
+      custom-class="help-dialog-right"
     >
       <div class="help-content">
         <h3>📖 股票回测功能使用指南</h3>
@@ -985,44 +1004,32 @@ onUnmounted(() => {
   flex-direction: column;
   background: #f5f7fa;
 
-  // 顶部固定区域
-  .page-header-fixed {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 60px;
-    background: white;
-    border-bottom: 1px solid #e4e7ed;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 20px;
-    z-index: 1000;
+  // 页面头部
+  .page-header {
+    padding: 24px 20px 20px;
 
-    .header-left {
-      .page-title {
-        font-size: 20px;
-        font-weight: 600;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin: 0;
-      }
+    .page-title {
+      font-size: 24px;
+      font-weight: 600;
+      color: #303133;
+      margin: 0 0 8px 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
     }
 
-    .header-right {
-      display: flex;
-      gap: 12px;
+    .page-description {
+      font-size: 14px;
+      color: #909399;
+      margin: 0;
     }
   }
 
   // 主体区域
   .main-content {
     display: flex;
-    margin-top: 60px;
-    margin-bottom: 50px;
-    min-height: calc(100vh - 110px);
+    padding: 0 20px 20px;
+    min-height: calc(100vh - 120px);
   }
 
   // 左侧辅助栏（20%）
@@ -1031,13 +1038,10 @@ onUnmounted(() => {
     padding: 20px;
     background: white;
     border-right: 1px solid #e4e7ed;
-    position: fixed;
-    top: 60px;
-    bottom: 50px;
-    overflow-y: auto;
 
     .steps-card,
-    .status-card {
+    .status-card,
+    .actions-card {
       margin-bottom: 20px;
 
       .card-title {
@@ -1045,6 +1049,22 @@ onUnmounted(() => {
         display: flex;
         align-items: center;
         gap: 8px;
+      }
+    }
+
+    // 快捷操作卡片样式
+    .actions-card {
+      :deep(.el-card__header) {
+        padding: 12px 15px;
+      }
+
+      :deep(.el-card__body) {
+        padding: 15px;
+      }
+
+      .actions-content {
+        display: flex;
+        flex-direction: column;
       }
     }
 
@@ -1063,10 +1083,9 @@ onUnmounted(() => {
     }
   }
 
-  // 右侧核心操作栏（70%）
+  // 右侧核心操作栏（80%）
   .right-main {
-    width: 70%;
-    margin-left: 25%;
+    width: 80%;
     padding: 20px;
 
     .config-card,
@@ -1098,34 +1117,6 @@ onUnmounted(() => {
 
       &.warning-tip {
         color: #e6a23c;
-      }
-    }
-
-    .strategy-list {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      max-height: 400px;
-      overflow-y: auto;
-
-      .strategy-item {
-        width: 100%;
-        margin: 0;
-
-        .strategy-item-content {
-          .strategy-name {
-            font-weight: 600;
-            margin-bottom: 4px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-          }
-
-          .strategy-desc {
-            font-size: 12px;
-            color: #909399;
-          }
-        }
       }
     }
 
@@ -1341,6 +1332,44 @@ onUnmounted(() => {
 
   .el-alert {
     margin-top: 20px;
+  }
+}
+</style>
+
+<style lang="scss">
+// 帮助文档对话框定位样式（非scoped，全局生效）
+.help-dialog-right {
+  position: fixed !important;
+  left: 30% !important;  // 调整为30%，对应新的布局
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+
+  .el-dialog__header {
+    background-color: #f5f7fa;
+    border-bottom: 1px solid #e4e7ed;
+  }
+}
+
+// 策略选择下拉框选项样式
+.el-select-dropdown__item {
+  height: auto !important;
+  padding: 12px 15px !important;
+
+  .strategy-option {
+    .strategy-option-name {
+      font-weight: 600;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+    }
+
+    .strategy-option-desc {
+      font-size: 12px;
+      color: #909399;
+      line-height: 1.5;
+    }
   }
 }
 </style>
