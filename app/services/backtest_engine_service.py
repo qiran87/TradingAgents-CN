@@ -462,7 +462,7 @@ class BacktestEngine:
         """
         from app.services.trading_calendar_service import TradingCalendarService
 
-        service = TradingCalendarService(self.db, None)
+        service = TradingCalendarService(self.db)
         trading_days = await service.get_trading_days(
             parameters["start_date"],
             parameters["end_date"]

@@ -77,6 +77,20 @@ export const useBacktestEngineStore = defineStore('backtestEngine', () => {
       const response = await backtestEngineApi.startBacktest(request)
       currentBacktestId.value = response.data.backtest_id
 
+      // 立即初始化回测状态为running
+      backtestStatus.value = {
+        backtest_id: response.data.backtest_id,
+        status: 'running',
+        execution_info: {
+          current_bar_index: 0,
+          total_bars: 0,
+          current_date: null,
+          progress: 0,
+          start_time: new Date().toISOString(),
+          elapsed_time: 0
+        }
+      } as BacktestStatus
+
       // 连接WebSocket
       connectWebSocket(response.data.backtest_id)
 
@@ -248,7 +262,15 @@ export const useBacktestEngineStore = defineStore('backtestEngine', () => {
 
       case 'error':
         console.error('[BacktestEngine] 回测错误:', message.data)
-        statusError.value = message.data?.message || '回测执行出错'
+        statusError.value = message.data?.error?.message || message.data?.message || '回测执行出错'
+
+        // 更新回测状态为失败
+        if (backtestStatus.value) {
+          backtestStatus.value = {
+            ...backtestStatus.value,
+            status: 'failed'
+          } as BacktestStatus
+        }
         break
 
       case 'pong':

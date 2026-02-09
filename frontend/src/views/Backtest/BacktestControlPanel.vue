@@ -46,6 +46,39 @@
             <div v-if="currentStatusDetail" class="status-detail">
               {{ currentStatusDetail }}
             </div>
+
+            <!-- 已选策略信息 -->
+            <el-divider v-if="selectedStrategy && strategyConfirmed" style="margin: 12px 0;"></el-divider>
+            <div v-if="selectedStrategy && strategyConfirmed" class="selected-strategy-info">
+              <div class="strategy-label">已选策略：</div>
+              <div class="strategy-value">
+                <el-tag type="success" size="default">{{ selectedStrategy.name }}</el-tag>
+              </div>
+            </div>
+
+            <!-- 已确认参数信息 -->
+            <el-divider v-if="paramsConfirmed" style="margin: 12px 0;"></el-divider>
+            <div v-if="paramsConfirmed" class="confirmed-params-info">
+              <div class="params-label">已确认参数：</div>
+              <div class="params-list">
+                <div class="param-item">
+                  <span class="param-key">股票：</span>
+                  <span class="param-value">{{ form.stock_code }}</span>
+                </div>
+                <div class="param-item">
+                  <span class="param-key">日期：</span>
+                  <span class="param-value">{{ form.start_date }} 至 {{ form.end_date }}</span>
+                </div>
+                <div class="param-item">
+                  <span class="param-key">资金：</span>
+                  <span class="param-value">{{ form.initial_capital?.toLocaleString() }} 元</span>
+                </div>
+                <div class="param-item">
+                  <span class="param-key">最小购买：</span>
+                  <span class="param-value">{{ form.min_purchase }} 股</span>
+                </div>
+              </div>
+            </div>
           </div>
         </el-card>
 
@@ -538,7 +571,7 @@
       <template #footer>
         <el-button v-if="guideStep > 0" @click="guideStep--">上一步</el-button>
         <el-button v-if="guideStep < 2" type="primary" @click="guideStep++">下一步</el-button>
-        <el-button v-else type="primary" @click="showNewUserGuide = false">我知道了</el-button>
+        <el-button v-else type="primary" @click="handleGuideFinished">我知道了</el-button>
       </template>
     </el-dialog>
 
@@ -706,6 +739,11 @@ const showNewUserGuide = ref(false)
 const showHelpDialog = ref(false)
 const guideStep = ref(0)
 
+// 策略确认状态
+const strategyConfirmed = ref(false)
+// 参数确认状态
+const paramsConfirmed = ref(false)
+
 // 计算属性
 const canStartBacktest = computed(() => {
   return form.value.stock_code &&
@@ -764,6 +802,9 @@ const currentStatusDetail = computed(() => {
   if (backtestStore.isRunning) {
     return `进度：${backtestStore.progress.toFixed(2)}% (${backtestStore.currentBarIndex}/${backtestStore.totalBars})`
   }
+  if (backtestStore.isFailed) {
+    return backtestStore.statusError || '回测执行失败'
+  }
   return ''
 })
 
@@ -784,6 +825,7 @@ const currentDate = computed(() => {
 function handleConfirmParams() {
   formRef.value?.validateField('initial_capital')
   formRef.value?.validateField('min_purchase')
+  paramsConfirmed.value = true
   ElMessage.success('参数已确认')
 }
 
@@ -792,6 +834,7 @@ function handleConfirmStrategy() {
     ElMessage.warning('请先选择策略')
     return
   }
+  strategyConfirmed.value = true
   ElMessage.success('策略已确认')
 }
 
@@ -821,6 +864,21 @@ async function confirmStartBacktest() {
   } catch (error: any) {
     ElMessage.error(error?.message || '启动失败')
   }
+}
+
+// 新手引导弹窗关闭后，继续启动回测
+async function handleGuideFinished() {
+  showNewUserGuide.value = false
+  localStorage.setItem('backtest_guide_shown', 'true')
+
+  // 继续执行回测启动流程
+  if (!canStartBacktest.value) {
+    ElMessage.warning('请完善回测参数')
+    return
+  }
+
+  // 显示参数确认弹窗
+  showParamsConfirmDialog.value = true
 }
 
 async function handleInterruptBacktest() {
@@ -865,6 +923,8 @@ function handleResetParams() {
     strategy_id: '',
     strategy_params: {}
   }
+  strategyConfirmed.value = false  // 重置策略确认状态
+  paramsConfirmed.value = false  // 重置参数确认状态
   ElMessage.success('参数已重置')
 }
 
@@ -1079,6 +1139,55 @@ onUnmounted(() => {
         font-size: 14px;
         color: #606266;
         text-align: center;
+      }
+
+      // 已选策略信息样式
+      .selected-strategy-info {
+        margin-top: 8px;
+
+        .strategy-label {
+          font-size: 13px;
+          color: #909399;
+          margin-bottom: 8px;
+          text-align: center;
+        }
+
+        .strategy-value {
+          display: flex;
+          justify-content: center;
+        }
+      }
+
+      // 已确认参数信息样式
+      .confirmed-params-info {
+        margin-top: 8px;
+
+        .params-label {
+          font-size: 13px;
+          color: #909399;
+          margin-bottom: 8px;
+          text-align: center;
+        }
+
+        .params-list {
+          .param-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            font-size: 13px;
+
+            .param-key {
+              color: #606266;
+              font-weight: 500;
+            }
+
+            .param-value {
+              color: #303133;
+              font-weight: 600;
+            }
+          }
+        }
       }
     }
   }

@@ -63,7 +63,7 @@ class BacktestStockDataService:
         """
         self.db = db
         self.stock_info_collection = db.stock_info
-        self.stock_quotes_collection = db.stock_quotes
+        self.stock_quotes_collection = db.stock_daily_quotes
 
         # 兼容集合：用于映射现有数据
         self.stock_basic_info_collection = db.stock_basic_info
@@ -187,13 +187,16 @@ class BacktestStockDataService:
             code_6 = str(stock_code).zfill(6).split('.')[0]
             full_code = self._get_full_stock_code(code_6)
 
-            # 3. 查询 stock_quotes 集合
+            # 3. 查询 stock_daily_quotes 集合
+            # stock_daily_quotes 使用 symbol 和 trade_date 字段
+            logger.info(f"[新代码] 查询行情数据: symbol={code_6}, 日期范围={start_date} 至 {end_date}")
             cursor = self.stock_quotes_collection.find({
-                "stock_code": {"$regex": f"^{code_6}"},
-                "date": {"$gte": start_date, "$lte": end_date}
-            }).sort("date", 1)
+                "symbol": {"$regex": f"^{code_6}"},
+                "trade_date": {"$gte": start_date, "$lte": end_date}
+            }).sort("trade_date", 1)
 
             quotes = await cursor.to_list(length=3000)
+            logger.info(f"[新代码] 查询结果: 找到 {len(quotes)} 条行情数据")
 
             # 4. 如果 stock_quotes 没有数据，尝试映射（改进1：添加映射标记检查）
             if not quotes:
@@ -220,7 +223,7 @@ class BacktestStockDataService:
             result = []
             for quote in quotes:
                 result.append({
-                    "date": quote["date"],
+                    "date": quote["trade_date"],  # 注意: 数据库中是 trade_date
                     "open": quote["open"],
                     "high": quote["high"],
                     "low": quote["low"],

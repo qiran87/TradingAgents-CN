@@ -70,7 +70,8 @@ def get_backtest_service() -> BacktestEngine:
 async def start_backtest(
     request: StartBacktestRequest,
     background_tasks: BackgroundTasks,
-    service: BacktestEngine = Depends(get_backtest_service)
+    db = Depends(get_mongo_db),
+    service: BacktestEngine = Depends(get_backtest_engine_service)
 ):
     """
     启动回测任务
@@ -95,7 +96,6 @@ async def start_backtest(
         }
 
         # 3. 创建任务文档
-        db = get_mongo_db()
         task_doc = {
             "backtest_id": backtest_id,
             "user_id": "default",  # 当前版本不区分用户
@@ -136,7 +136,8 @@ async def start_backtest(
 @router.post("/{backtest_id}/interrupt", response_model=dict)
 async def interrupt_backtest(
     backtest_id: str,
-    service: BacktestEngine = Depends(get_backtest_service)
+    db = Depends(get_mongo_db),
+    service: BacktestEngine = Depends(get_backtest_engine_service)
 ):
     """
     中断回测任务
@@ -147,7 +148,6 @@ async def interrupt_backtest(
     - POST /api/backtest/bt_20240205_143055_123456/interrupt
     """
     try:
-        db = get_mongo_db()
 
         # 检查任务是否存在
         task = await db.backtest_tasks.find_one({"backtest_id": backtest_id})
@@ -186,7 +186,8 @@ async def interrupt_backtest(
 @router.post("/{backtest_id}/continue", response_model=dict)
 async def continue_backtest(
     backtest_id: str,
-    service: BacktestEngine = Depends(get_backtest_service)
+    db = Depends(get_mongo_db),
+    service: BacktestEngine = Depends(get_backtest_engine_service)
 ):
     """
     继续回测任务
@@ -197,7 +198,6 @@ async def continue_backtest(
     - POST /api/backtest/bt_20240205_143055_123456/continue
     """
     try:
-        db = get_mongo_db()
 
         # 检查任务是否存在
         task = await db.backtest_tasks.find_one({"backtest_id": backtest_id})
@@ -240,7 +240,10 @@ async def continue_backtest(
 
 
 @router.get("/{backtest_id}/status", response_model=dict)
-async def get_backtest_status(backtest_id: str):
+async def get_backtest_status(
+    backtest_id: str,
+    db = Depends(get_mongo_db)
+):
     """
     查询回测状态
 
@@ -250,7 +253,6 @@ async def get_backtest_status(backtest_id: str):
     - GET /api/backtest/bt_20240205_143055_123456/status
     """
     try:
-        db = get_mongo_db()
         task = await db.backtest_tasks.find_one({"backtest_id": backtest_id})
 
         if not task:
@@ -271,7 +273,8 @@ async def get_backtest_status(backtest_id: str):
 @router.delete("/{backtest_id}", response_model=dict)
 async def abort_backtest(
     backtest_id: str,
-    service: BacktestEngine = Depends(get_backtest_service)
+    db = Depends(get_mongo_db),
+    service: BacktestEngine = Depends(get_backtest_engine_service)
 ):
     """
     放弃回测任务
@@ -282,7 +285,6 @@ async def abort_backtest(
     - DELETE /api/backtest/bt_20240205_143055_123456
     """
     try:
-        db = get_mongo_db()
 
         # 检查任务是否存在
         task = await db.backtest_tasks.find_one({"backtest_id": backtest_id})
