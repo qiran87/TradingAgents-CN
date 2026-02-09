@@ -380,10 +380,11 @@ const loadTrades = async () => {
 
   tradesLoading.value = true
   try {
-    // 使用分页参数
+    // 使用分页参数 - 修正参数顺序
     const response = await backtestEngineApi.getBacktestTrades(
       props.backtestId,
-      pageSize.value * 3  // 获取更多数据以支持分页
+      1,  // page = 1 (第一页)
+      pageSize.value * 3  // pageSize 获取更多数据以支持分页
     )
     if (response.success) {
       trades.value = response.data.trades
