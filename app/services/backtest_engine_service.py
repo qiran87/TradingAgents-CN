@@ -579,7 +579,9 @@ class BacktestEngine:
         cash_before = state.cash
         position_before = state.position
         state.cash -= total_cost
-        state.add_position(shares, price, date)
+        # 计算单位总成本(包含手续费)
+        unit_total_cost = total_cost / shares
+        state.add_position(shares, unit_total_cost, date)
 
         # 记录交易
         trade_doc = {
@@ -666,7 +668,8 @@ class BacktestEngine:
 
         # 计算盈亏金额
         # 盈亏 = 卖出金额 - 手续费 - 成本基础
-        profit_loss = amount - total_cost - (cost_basis * sell_shares)
+        # 注意: cost_basis已经是总成本,不需要再乘以sell_shares
+        profit_loss = amount - total_cost - cost_basis
 
         # 记录交易
         trade_doc = {

@@ -442,6 +442,11 @@ class ResultCalculator:
         buy_trades = [t for t in trades if t["trade_type"] == "buy"]
         sell_trades = [t for t in trades if t["trade_type"] == "sell"]
 
+        # 检查未平仓交易
+        unpaired_count = max(0, len(buy_trades) - len(sell_trades))
+        if unpaired_count > 0:
+            logger.warning(f"⚠️ 发现{unpaired_count}笔未平仓买入交易未计入交易统计")
+
         # 配对买卖交易计算盈亏
         paired_trades = self._pair_trades(buy_trades, sell_trades)
 
@@ -508,15 +513,23 @@ class ResultCalculator:
                 paired_shares = min(remaining_shares_to_sell, buy_shares_available)
 
                 # 计算盈亏
+                # 方法: 价差盈亏 - 手续费
                 profit = (sell_trade["price"] - buy_trade["price"]) * paired_shares
 
-                # 按比例分摊手续费
+                # 计算手续费(不包含成交金额)
+                # 买入的total_cost包含amount,需要减去amount得到纯手续费
                 buy_cost_ratio = paired_shares / buy_trade["shares"]
-                buy_cost = buy_trade["total_cost"] * buy_cost_ratio
-                sell_cost_ratio = paired_shares / sell_trade["shares"]
-                sell_cost = sell_trade["total_cost"] * sell_cost_ratio
+                buy_fees = (buy_trade["total_cost"] - buy_trade["amount"]) * buy_cost_ratio
 
-                profit -= (buy_cost + sell_cost)
+                # 卖出的total_cost本身就是纯手续费(不包含amount)
+                sell_cost_ratio = paired_shares / sell_trade["shares"]
+                sell_fees = sell_trade["total_cost"] * sell_cost_ratio
+
+                profit -= (buy_fees + sell_fees)
+
+                # 记录手续费(用于显示)
+                buy_cost = buy_fees
+                sell_cost = sell_fees
 
                 paired.append({
                     "buy_date": buy_trade["date"],
