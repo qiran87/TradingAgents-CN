@@ -62,53 +62,68 @@ class DualMAStrategy(BaseStrategy):
         """
         处理单个K线数据
 
+        重要：回测中只能使用历史数据做决策，不能包含当天价格
+
         Args:
             bar_id: K线ID
             timestamp: 时间戳
-            current_price: 当前价格
+            current_price: 当前价格（收盘价）
             position: 当前持仓（股数）
             cash: 当前现金（元）
 
         Returns:
             交易信号
         """
-        # 添加到价格历史
-        self.price_history.append(current_price)
-
         # 如果历史数据不足，保持观望
-        if len(self.price_history) < self.long_window:
+        # 注意: 计算MA需要至少 long_window + 1 个历史数据
+        # 因为需要比较前两天和前一天的均线
+        if len(self.price_history) < self.long_window + 1:
+            # 数据积累期,先添加到历史
+            self.price_history.append(current_price)
             return {"action": "hold", "amount": 0, "reason": "数据积累中"}
 
-        # 计算短期均线
-        short_ma = sum(self.price_history[-self.short_window:]) / self.short_window
+        # 计算前两天的均线
+        # 例如D7天决策时:
+        # price_history = [D1, D2, D3, D4, D5, D6]
+        # current_price = D7
+        # prev_prev_short_ma (D5的MA5): [D1,D2,D3,D4,D5]
+        # prev_short_ma (D6的MA5): [D2,D3,D4,D5,D6]
+        prev_prev_short_ma = sum(self.price_history[-self.short_window-1:-1]) / self.short_window
+        prev_prev_long_ma = sum(self.price_history[-self.long_window-1:-1]) / self.long_window
 
-        # 计算长期均线
-        long_ma = sum(self.price_history[-self.long_window:]) / self.long_window
+        # 计算前一天的均线
+        prev_short_ma = sum(self.price_history[-self.short_window:]) / self.short_window
+        prev_long_ma = sum(self.price_history[-self.long_window:]) / self.long_window
 
-        # 前一个短期和长期均线
-        if len(self.price_history) > self.long_window:
-            prev_short_ma = sum(self.price_history[-self.short_window-1:-1]) / self.short_window
-            prev_long_ma = sum(self.price_history[-self.long_window-1:-1]) / self.long_window
-
-            # 金叉：短期均线上穿长期均线
-            if prev_short_ma <= prev_long_ma and short_ma > long_ma:
-                if position == 0:  # 没有持仓
-                    # 计算可买入股数（使用现金的90%）
-                    buy_amount = int((cash * 0.9) / current_price / 100) * 100
-                    if buy_amount > 0:
-                        return {
-                            "action": "buy",
-                            "amount": buy_amount,
-                            "reason": f"金叉: 短期均线({short_ma:.4f})上穿长期均线({long_ma:.4f})"
-                        }
-
-            # 死叉：短期均线下穿长期均线
-            elif prev_short_ma >= prev_long_ma and short_ma < long_ma:
-                if position > 0:  # 有持仓
+        # 金叉：短期均线上穿长期均线
+        # 判断: 前两天的MA <= 前一天的MA (前两天短期MA低于或等于长期MA)
+        #       前一天的短期MA > 前一天的长期MA (前一天短期MA高于长期MA)
+        if prev_prev_short_ma <= prev_prev_long_ma and prev_short_ma > prev_long_ma:
+            if position == 0:  # 没有持仓
+                # 计算可买入股数（使用现金的90%）
+                buy_amount = int((cash * 0.9) / current_price / 100) * 100
+                if buy_amount > 0:
+                    # 决策后再添加当天价格到历史
+                    self.price_history.append(current_price)
                     return {
-                        "action": "sell",
-                        "amount": position,
-                        "reason": f"死叉: 短期均线({short_ma:.4f})下穿长期均线({long_ma:.4f})"
+                        "action": "buy",
+                        "amount": buy_amount,
+                        "reason": f"金叉: 短期均线({prev_prev_short_ma:.4f}→{prev_short_ma:.4f})上穿长期均线({prev_prev_long_ma:.4f}→{prev_long_ma:.4f})"
                     }
 
+        # 死叉：短期均线下穿长期均线
+        # 判断: 前两天的MA >= 前一天的MA (前两天短期MA高于或等于长期MA)
+        #       前一天的短期MA < 前一天的长期MA (前一天短期MA低于长期MA)
+        elif prev_prev_short_ma >= prev_prev_long_ma and prev_short_ma < prev_long_ma:
+            if position > 0:  # 有持仓
+                # 决策后再添加当天价格到历史
+                self.price_history.append(current_price)
+                return {
+                    "action": "sell",
+                    "amount": position,
+                    "reason": f"死叉: 短期均线({prev_prev_short_ma:.4f}→{prev_short_ma:.4f})下穿长期均线({prev_prev_long_ma:.4f}→{prev_long_ma:.4f})"
+                }
+
+        # 无信号,添加当天价格到历史
+        self.price_history.append(current_price)
         return {"action": "hold", "amount": 0, "reason": "无交易信号"}
