@@ -99,7 +99,7 @@ class DualMAStrategy(BaseStrategy):
                         return {
                             "action": "buy",
                             "amount": buy_amount,
-                            "reason": f"金叉: 短期均线({short_ma:.2f})上穿长期均线({long_ma:.2f})"
+                            "reason": f"金叉: 短期均线({short_ma:.4f})上穿长期均线({long_ma:.4f})"
                         }
 
             # 死叉：短期均线下穿长期均线
@@ -108,7 +108,7 @@ class DualMAStrategy(BaseStrategy):
                     return {
                         "action": "sell",
                         "amount": position,
-                        "reason": f"死叉: 短期均线({short_ma:.2f})下穿长期均线({long_ma:.2f})"
+                        "reason": f"死叉: 短期均线({short_ma:.4f})下穿长期均线({long_ma:.4f})"
                     }
 
         return {"action": "hold", "amount": 0, "reason": "无交易信号"}
