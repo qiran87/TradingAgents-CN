@@ -192,6 +192,81 @@ STRATEGIES = [
         "is_builtin": True,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()
+    },
+    {
+        "strategy_id": "mdvaes",
+        "name": "MDVAES估值策略",
+        "description": "基于多锚点估值系统(MDVAES)进行价值投资决策",
+        "long_description": "MDVAES估值策略通过分析师盈利预测和历史数据外推，使用对数最小二乘法计算增长率。结合PEG、历史PE、PB、DCF多锚点估值，动态调整安全边际，适合长期价值投资。",
+        "category": "valuation",
+        "parameters": [
+            {
+                "name": "symbol",
+                "type": "string",
+                "default_value": "000001.SZ",
+                "description": "股票代码",
+                "required": True
+            },
+            {
+                "name": "forecast_years",
+                "type": "int",
+                "default_value": 5,
+                "range": {"min": 1, "max": 10},
+                "description": "EPS预测年数",
+                "required": False
+            },
+            {
+                "name": "peg_base",
+                "type": "float",
+                "default_value": 1.0,
+                "range": {"min": 0.5, "max": 2.0},
+                "description": "PEG基数",
+                "required": False
+            },
+            {
+                "name": "risk_adjustment",
+                "type": "float",
+                "default_value": 0.1,
+                "range": {"min": 0.0, "max": 0.3},
+                "description": "风险调整幅度",
+                "required": False
+            },
+            {
+                "name": "rebalance_frequency",
+                "type": "int",
+                "default_value": 90,
+                "range": {"min": 1, "max": 365},
+                "description": "重新估值频率(天)",
+                "required": False
+            },
+            {
+                "name": "use_margin",
+                "type": "bool",
+                "default_value": True,
+                "description": "使用安全边际",
+                "required": False
+            },
+            {
+                "name": "margin_buy",
+                "type": "float",
+                "default_value": 0.8,
+                "range": {"min": 0.5, "max": 0.95},
+                "description": "买入安全边际(价格低于估值的百分比)",
+                "required": False
+            },
+            {
+                "name": "margin_sell",
+                "type": "float",
+                "default_value": 1.2,
+                "range": {"min": 1.05, "max": 2.0},
+                "description": "卖出安全边际(价格高于估值的百分比)",
+                "required": False
+            }
+        ],
+        "usage_count": 0,
+        "is_builtin": True,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow()
     }
 ]
 
@@ -216,6 +291,13 @@ CATEGORIES = [
         "name": "动量策略",
         "description": "基于价格动量的策略",
         "sort_order": 3,
+        "created_at": datetime.utcnow()
+    },
+    {
+        "category_id": "valuation",
+        "name": "估值策略",
+        "description": "基于基本面估值的策略，适合长期投资",
+        "sort_order": 4,
         "created_at": datetime.utcnow()
     }
 ]
