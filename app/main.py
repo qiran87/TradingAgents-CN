@@ -73,6 +73,12 @@ from app.worker.baostock_sync_service import (
 # 港股和美股改为按需获取+缓存模式，不再需要定时同步任务
 # from app.worker.hk_sync_service import ...
 # from app.worker.us_sync_service import ...
+from app.services.mdvaes_data_sync_service import (
+    run_mdvaes_sync,
+    run_mdvaes_status_check
+)
+# from app.worker.hk_sync_service import ...
+# from app.worker.us_sync_service import ...
 from app.middleware.operation_log_middleware import OperationLogMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -624,6 +630,35 @@ async def lifespan(app: FastAPI):
             logger.info(f"⏸️ 新闻数据同步已添加但暂停: {settings.NEWS_SYNC_CRON}")
         else:
             logger.info(f"📰 新闻数据同步已配置（仅自选股）: {settings.NEWS_SYNC_CRON}")
+
+        # ==================== MDVAES 估值数据同步任务配置 ====================
+        logger.info("🔄 配置 MDVAES 估值数据同步任务...")
+
+        # MDVAES 数据同步任务
+        scheduler.add_job(
+            run_mdvaes_sync,
+            CronTrigger.from_crontab(settings.MDVAES_SYNC_CRON, timezone=settings.TIMEZONE),
+            id="mdvaes_sync",
+            name="MDVAES 估值数据同步"
+        )
+        if not settings.MDVAES_SYNC_ENABLED:
+            scheduler.pause_job("mdvaes_sync")
+            logger.info(f"⏸️ MDVAES 数据同步已添加但暂停: {settings.MDVAES_SYNC_CRON}")
+        else:
+            logger.info(f"📊 MDVAES 数据同步已配置: {settings.MDVAES_SYNC_CRON}")
+
+        # MDVAES 状态检查任务
+        scheduler.add_job(
+            run_mdvaes_status_check,
+            CronTrigger.from_crontab(settings.MDVAES_STATUS_CHECK_CRON, timezone=settings.TIMEZONE),
+            id="mdvaes_status_check",
+            name="MDVAES 数据状态检查"
+        )
+        if not settings.MDVAES_STATUS_CHECK_ENABLED:
+            scheduler.pause_job("mdvaes_status_check")
+            logger.info(f"⏸️ MDVAES 状态检查已添加但暂停: {settings.MDVAES_STATUS_CHECK_CRON}")
+        else:
+            logger.info(f"🔍 MDVAES 状态检查已配置: {settings.MDVAES_STATUS_CHECK_CRON}")
 
         scheduler.start()
 

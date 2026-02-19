@@ -1,6 +1,7 @@
 """MDVAES 数据同步服务 - 从 Tushare 同步数据到 MongoDB"""
 
 import logging
+import asyncio
 from typing import Optional
 from datetime import datetime, timedelta
 import tushare as ts
@@ -53,7 +54,9 @@ class MDVAESDataSyncService:
         limit = 3000
 
         while True:
-            df = self.pro.report_rc(
+            # 使用 asyncio.to_thread 在单独线程中执行阻塞的 Tushare API 调用
+            df = await asyncio.to_thread(
+                self.pro.report_rc,
                 report_date=report_date,
                 offset=offset,
                 limit=limit
@@ -98,7 +101,9 @@ class MDVAESDataSyncService:
         # 获取前 10 个交易日（确保数据完整性）
         start_date = (datetime.strptime(trade_date, "%Y%m%d") - timedelta(days=20)).strftime("%Y%m%d")
 
-        df = self.pro.daily_basic(
+        # 使用 asyncio.to_thread 在单独线程中执行阻塞的 Tushare API 调用
+        df = await asyncio.to_thread(
+            self.pro.daily_basic,
             ts_code="",
             start_date=start_date,
             end_date=trade_date,
@@ -132,7 +137,9 @@ class MDVAESDataSyncService:
         Tushare 接口: yc_cb (doc_id=201)
         获取 10 年期国债收益率
         """
-        df = self.pro.yc_cb(
+        # 使用 asyncio.to_thread 在单独线程中执行阻塞的 Tushare API 调用
+        df = await asyncio.to_thread(
+            self.pro.yc_cb,
             ts_code="1001.CB",  # 国债代码
             curve_type="0",      # 到期收益率
             curve_term=10.0,     # 10 年期
@@ -158,3 +165,93 @@ class MDVAESDataSyncService:
             )
 
             logger.info(f"  ✅ 同步国债收益率: {record['yield']}%")
+
+    async def get_sync_status(self):
+        """获取 MDVAES 数据同步状态"""
+        db = await get_mongo_db()
+
+        # 统计各集合的数据量
+        analyst_count = await db.mdvaes_analyst_forecasts.estimated_document_count()
+        pe_history_count = await db.mdvaes_pe_history.estimated_document_count()
+        bond_rate_count = await db.mdvaes_bond_rate.estimated_document_count()
+
+        # 获取最新同步时间
+        latest_analyst = await db.mdvaes_analyst_forecasts.find_one(
+            sort=[("synced_at", -1)],
+            projection={"synced_at": 1, "_id": 0}
+        )
+        latest_pe = await db.mdvaes_pe_history.find_one(
+            sort=[("synced_at", -1)],
+            projection={"synced_at": 1, "_id": 0}
+        )
+        latest_bond = await db.mdvaes_bond_rate.find_one(
+            sort=[("synced_at", -1)],
+            projection={"synced_at": 1, "_id": 0}
+        )
+
+        return {
+            "analyst_forecasts": {
+                "count": analyst_count,
+                "latest_sync": latest_analyst.get("synced_at") if latest_analyst else None
+            },
+            "pe_history": {
+                "count": pe_history_count,
+                "latest_sync": latest_pe.get("synced_at") if latest_pe else None
+            },
+            "bond_rate": {
+                "count": bond_rate_count,
+                "latest_sync": latest_bond.get("synced_at") if latest_bond else None
+            }
+        }
+
+
+# 全局服务实例
+_mdvaes_sync_service: Optional[MDVAESDataSyncService] = None
+
+
+def get_mdvaes_sync_service() -> MDVAESDataSyncService:
+    """获取 MDVAES 数据同步服务实例"""
+    global _mdvaes_sync_service
+    if _mdvaes_sync_service is None:
+        _mdvaes_sync_service = MDVAESDataSyncService()
+    return _mdvaes_sync_service
+
+
+# APScheduler 兼容的任务函数
+async def run_mdvaes_sync():
+    """APScheduler 任务：同步 MDVAES 估值数据（分析师预测、PE/PB、国债收益率）"""
+    logger.info("🚀 [APScheduler] 开始执行 MDVAES 数据同步任务")
+    try:
+        from app.services.trading_calendar_service import get_trading_calendar_service
+
+        # 获取最新交易日
+        calendar_service = get_trading_calendar_service()
+        latest_trade_date = await calendar_service.get_latest_trading_day()
+        trade_date_str = latest_trade_date.strftime("%Y%m%d")
+
+        logger.info(f"📅 [MDVAES] 使用最新交易日: {trade_date_str}")
+
+        # 执行同步
+        service = get_mdvaes_sync_service()
+        result = await service.sync_daily_data(trade_date_str)
+
+        logger.info(f"✅ [APScheduler] MDVAES 数据同步完成: {result}")
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ [APScheduler] MDVAES 数据同步失败: {e}")
+        import traceback
+        logger.error(f"详细错误: {traceback.format_exc()}")
+        raise
+
+
+async def run_mdvaes_status_check():
+    """APScheduler 任务：检查 MDVAES 数据同步状态"""
+    try:
+        service = get_mdvaes_sync_service()
+        result = await service.get_sync_status()
+        logger.info(f"✅ [MDVAES] 状态检查完成: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"❌ [MDVAES] 状态检查失败: {e}")
+        return {"error": str(e)}

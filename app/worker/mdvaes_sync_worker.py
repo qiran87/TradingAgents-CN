@@ -3,22 +3,22 @@
 import asyncio
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from app.services.mdvaes_data_sync_service import MDVAESDataSyncService
-from app.services.trading_calendar_service import TradingCalendarService
+from app.services.mdvaes_data_sync_service import get_mdvaes_sync_service
+from app.services.trading_calendar_service import get_trading_calendar_service
 
 logger = logging.getLogger(__name__)
 
 # 创建调度器
 scheduler = AsyncIOScheduler()
 
-# 数据同步服务
-sync_service = MDVAESDataSyncService()
-calendar_service = TradingCalendarService()
-
 
 async def daily_sync_task():
     """每日数据同步任务（每个交易日 16:30 执行）"""
     try:
+        # 获取服务实例
+        sync_service = get_mdvaes_sync_service()
+        calendar_service = get_trading_calendar_service()
+
         # 获取最新交易日
         latest_trade_date = await calendar_service.get_latest_trading_day()
         trade_date_str = latest_trade_date.strftime("%Y%m%d")

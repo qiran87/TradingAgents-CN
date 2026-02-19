@@ -299,3 +299,22 @@ class TradingCalendarService:
             },
             "trading_day_percentage": round(len(trading_days) / len(all_days) * 100, 2) if all_days else 0
         }
+
+
+# 全局服务实例
+_trading_calendar_service: Optional[TradingCalendarService] = None
+
+
+def get_trading_calendar_service() -> TradingCalendarService:
+    """
+    获取交易日历服务实例
+
+    Returns:
+        TradingCalendarService 实例
+    """
+    global _trading_calendar_service
+    if _trading_calendar_service is None:
+        from app.core.database import get_mongo_db
+        db = get_mongo_db()
+        _trading_calendar_service = TradingCalendarService(db)
+    return _trading_calendar_service

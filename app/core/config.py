@@ -276,6 +276,12 @@ class Settings(BaseSettings):
     NEWS_SYNC_HOURS_BACK: int = Field(default=24)
     NEWS_SYNC_MAX_PER_SOURCE: int = Field(default=50)
 
+    # ===== MDVAES 估值数据同步服务配置 =====
+    MDVAES_SYNC_ENABLED: bool = Field(default=True)
+    MDVAES_SYNC_CRON: str = Field(default="30 16 * * 1-5")  # 交易日下午16:30（周一到周五）
+    MDVAES_STATUS_CHECK_ENABLED: bool = Field(default=True)
+    MDVAES_STATUS_CHECK_CRON: str = Field(default="0 8 * * *")  # 每天早上8点检查
+
     @property
     def is_production(self) -> bool:
         """是否为生产环境"""
