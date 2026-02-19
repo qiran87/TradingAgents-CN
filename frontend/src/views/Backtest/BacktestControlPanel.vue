@@ -212,6 +212,7 @@
                   <el-select v-model="strategyFilter.category" placeholder="全部分类" clearable>
                     <el-option label="趋势策略" value="trend" />
                     <el-option label="震荡策略" value="oscillator" />
+                    <el-option label="估值策略" value="valuation" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="搜索">
@@ -722,6 +723,23 @@ const strategies = ref([
     is_builtin: true,
     category: 'trend',
     parameters: []
+  },
+  {
+    id: 'mdvaes',
+    name: 'MDVAES估值策略',
+    description: '基于多锚点估值系统(MDVAES)进行价值投资决策，通过分析师盈利预测和多锚点估值计算内在价值',
+    is_builtin: true,
+    category: 'valuation',
+    parameters: [
+      { name: 'symbol', label: '股票代码', type: 'string', default: '000001.SZ' },
+      { name: 'forecast_years', label: 'EPS预测年数', type: 'number', min: 1, max: 10, step: 1, default: 5 },
+      { name: 'peg_base', label: 'PEG基数', type: 'number', min: 0.5, max: 2.0, step: 0.1, default: 1.0 },
+      { name: 'risk_adjustment', label: '风险调整幅度', type: 'number', min: 0, max: 0.3, step: 0.01, default: 0.1 },
+      { name: 'rebalance_frequency', label: '重新估值频率(天)', type: 'number', min: 1, max: 365, step: 1, default: 90 },
+      { name: 'use_margin', label: '使用安全边际', type: 'boolean', default: true },
+      { name: 'margin_buy', label: '买入安全边际', type: 'number', min: 0.5, max: 0.95, step: 0.05, default: 0.8 },
+      { name: 'margin_sell', label: '卖出安全边际', type: 'number', min: 1.05, max: 2.0, step: 0.05, default: 1.2 }
+    ]
   }
 ])
 
