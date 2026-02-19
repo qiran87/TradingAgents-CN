@@ -1363,12 +1363,8 @@ onUnmounted(() => {
     }
   }
 
-  // 底部固定区域
+  // 底部区域（流式布局，不覆盖侧边栏）
   .page-footer-fixed {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
     height: 50px;
     background: white;
     border-top: 1px solid #e4e7ed;
@@ -1376,7 +1372,7 @@ onUnmounted(() => {
     align-items: center;
     justify-content: space-between;
     padding: 0 20px;
-    z-index: 1000;
+    margin-top: 20px;
 
     .version-info {
       font-size: 12px;
