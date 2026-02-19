@@ -31,6 +31,7 @@ from app.core.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
 from app.routers import auth_db as auth, analysis, screening, queue, sse, health, favorites, config, reports, database, operation_logs, tags, tushare_init, akshare_init, baostock_init, historical_data, multi_period_sync, financial_data, news_data, social_media, internal_messages, usage_statistics, model_capabilities, cache, logs
+from app.routers import mdvaes as mdvaes_router
 from app.routers import sync as sync_router, multi_source_sync
 from app.routers import stocks as stocks_router
 from app.routers import stock_data as stock_data_router
@@ -781,6 +782,7 @@ app.include_router(backtest_engine_router.router, tags=["backtest-engine"])
 app.include_router(backtest_history_router.router, tags=["backtest-history"])
 app.include_router(backtest_export_router.router, tags=["backtest-export"])
 app.include_router(saved_params_router.router, tags=["backtest-saved-params"])
+app.include_router(mdvaes_router.router, tags=["mdvaes"])
 app.include_router(tushare_init.router, prefix="/api", tags=["tushare-init"])
 app.include_router(akshare_init.router, prefix="/api", tags=["akshare-init"])
 app.include_router(baostock_init.router, prefix="/api", tags=["baostock-init"])
