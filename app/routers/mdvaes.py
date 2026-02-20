@@ -12,6 +12,7 @@ from app.models.mdvaes import (
 )
 from app.services.mdvaes_service import get_mdvaes_service
 from app.services.mdvaes_data_sync_service import get_mdvaes_sync_service
+from app.core.database import get_mongo_db
 
 router = APIRouter(prefix="/api/mdvaes", tags=["MDVAES估值"])
 logger = logging.getLogger("webapi")
