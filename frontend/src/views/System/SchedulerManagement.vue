@@ -33,6 +33,14 @@
       <div class="actions">
         <el-button @click="loadJobs" :loading="loading" :icon="Refresh">刷新</el-button>
         <el-button @click="showHistoryDialog" :icon="Document">执行历史</el-button>
+        <el-button
+          v-if="isAdmin"
+          type="warning"
+          @click="showBatchSyncDialog"
+          :icon="Promotion"
+        >
+          批量同步历史数据
+        </el-button>
       </div>
     </el-card>
 
@@ -570,6 +578,99 @@
         <el-button @click="executionDetailDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- 批量同步历史数据对话框 -->
+    <el-dialog
+      v-model="batchSyncDialogVisible"
+      title="批量同步 MDVAES 历史数据"
+      width="600px"
+      :close-on-click-modal="false"
+    >
+      <el-alert
+        title="说明"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 20px"
+      >
+        <template #default>
+          <div>用于补充缺失的 MDVAES 历史数据，包括：</div>
+          <ul style="margin: 8px 0 0 20px; padding-left: 20px;">
+            <li>分析师盈利预测数据</li>
+            <li>每日估值指标（PE/PB/PS）</li>
+            <li>10年期国债收益率</li>
+          </ul>
+          <div style="margin-top: 8px;">⚠️ 建议在非交易时间进行大范围同步</div>
+        </template>
+      </el-alert>
+
+      <el-form :model="batchSyncForm" label-width="100px" label-position="top">
+        <!-- 快捷选择 -->
+        <el-form-item label="快捷选择">
+          <div class="quick-ranges">
+            <el-button
+              v-for="range in quickDateRanges"
+              :key="range.label"
+              size="small"
+              @click="selectQuickDateRange(range)"
+            >
+              {{ range.label }}
+            </el-button>
+          </div>
+        </el-form-item>
+
+        <!-- 日期范围选择 -->
+        <el-form-item label="自定义范围" required>
+          <el-date-picker
+            v-model="batchSyncForm.dateRange"
+            type="daterange"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            :disabled-date="disabledDate"
+            :clearable="false"
+            style="width: 100%"
+          />
+        </el-form-item>
+
+        <!-- 预估信息 -->
+        <el-form-item label="预估信息">
+          <div v-if="batchSyncForm.dateRange && batchSyncForm.dateRange.length === 2" class="estimate-info">
+            <el-text size="small">
+              <el-icon><Calendar /></el-icon>
+              同步天数：<strong>{{ estimatedDays }}</strong> 天
+            </el-text>
+            <br />
+            <el-text size="small" type="info">
+              预计耗时：约 <strong>{{ estimatedTime }}</strong> （实际视网络情况而定）
+            </el-text>
+          </div>
+          <el-text v-else type="info">请选择日期范围</el-text>
+        </el-form-item>
+
+        <!-- 注意事项 -->
+        <el-form-item label="注意事项">
+          <div class="tips">
+            <p>• 单次同步时间范围不超过 3 年</p>
+            <p>• 可重复执行不同时间段，已存在数据会自动跳过</p>
+            <p>• 确保网络连接稳定，Tushare API 有调用限制</p>
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="batchSyncDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          @click="startBatchSync"
+          :loading="batchSyncSubmitting"
+          :disabled="!batchSyncForm.dateRange || batchSyncForm.dateRange.length !== 2"
+        >
+          开始同步
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -586,7 +687,8 @@ import {
   Promotion,
   View,
   Edit,
-  Search
+  Search,
+  Calendar
 } from '@element-plus/icons-vue'
 import {
   getJobs,
@@ -607,12 +709,18 @@ import {
   type SchedulerStats
 } from '@/api/scheduler'
 import { formatDateTime, formatRelativeTime } from '@/utils/datetime'
+import { useAuthStore } from '@/stores/auth'
+import dayjs from 'dayjs'
 
 // 数据
 const loading = ref(false)
 const jobs = ref<Job[]>([])
 const stats = ref<SchedulerStats | null>(null)
 const actionLoading = reactive<Record<string, boolean>>({})
+
+// 用户信息
+const authStore = useAuthStore()
+const isAdmin = computed(() => authStore.user?.is_admin === true)
 
 // 搜索和筛选
 const searchKeyword = ref('')
@@ -651,6 +759,44 @@ const executionPageSize = ref(20)
 const executionStatusFilter = ref('')
 const executionDetailDialogVisible = ref(false)
 const currentExecution = ref<JobExecution | null>(null)
+
+// 批量同步历史数据
+const batchSyncDialogVisible = ref(false)
+const batchSyncSubmitting = ref(false)
+const batchSyncForm = reactive({
+  dateRange: [null, null] as [string | null, string | null]
+})
+
+// 快捷日期范围选项
+const quickDateRanges = [
+  {
+    label: '最近 1 个月',
+    value: () => [dayjs().subtract(1, 'month').format('YYYY-MM-DD'), dayjs().format('YYYY-MM-DD')]
+  },
+  {
+    label: '最近 3 个月',
+    value: () => [dayjs().subtract(3, 'month').format('YYYY-MM-DD'), dayjs().format('YYYY-MM-DD')]
+  },
+  {
+    label: '最近半年',
+    value: () => [dayjs().subtract(6, 'month').format('YYYY-MM-DD'), dayjs().format('YYYY-MM-DD')]
+  },
+  {
+    label: '最近 1 年',
+    value: () => [dayjs().subtract(1, 'year').format('YYYY-MM-DD'), dayjs().format('YYYY-MM-DD')]
+  },
+  {
+    label: '今年',
+    value: () => [dayjs().startOf('year').format('YYYY-MM-DD'), dayjs().format('YYYY-MM-DD')]
+  },
+  {
+    label: '去年',
+    value: () => [
+      dayjs().subtract(1, 'year').startOf('year').format('YYYY-MM-DD'),
+      dayjs().subtract(1, 'year').endOf('year').format('YYYY-MM-DD')
+    ]
+  }
+]
 
 // 计算属性
 const filteredJobs = computed(() => {
@@ -702,6 +848,25 @@ const filteredJobs = computed(() => {
   })
 
   return result
+})
+
+// 批量同步计算属性
+const estimatedDays = computed(() => {
+  if (!batchSyncForm.dateRange || batchSyncForm.dateRange.length !== 2) {
+    return 0
+  }
+  const [start, end] = batchSyncForm.dateRange
+  return dayjs(end).diff(dayjs(start), 'day') + 1
+})
+
+const estimatedTime = computed(() => {
+  const days = estimatedDays.value
+  if (days <= 0) return '-'
+  if (days <= 30) return '1-3 分钟'
+  if (days <= 90) return '3-10 分钟'
+  if (days <= 365) return '10-30 分钟'
+  if (days <= 1095) return '30-60 分钟'
+  return '超过 1 小时'
 })
 
 // 方法
@@ -908,6 +1073,89 @@ watch(historyDialogVisible, (newVal) => {
     stopAutoRefresh()
   }
 })
+
+// ========== 批量同步历史数据相关方法 ==========
+
+// 显示批量同步对话框
+const showBatchSyncDialog = () => {
+  // 重置表单
+  batchSyncForm.dateRange = [null, null]
+  batchSyncDialogVisible.value = true
+}
+
+// 禁用未来日期
+const disabledDate = (time: Date) => {
+  return time.getTime() > Date.now()
+}
+
+// 选择快捷日期范围
+const selectQuickDateRange = (range: { label: string; value: () => [string, string] }) => {
+  batchSyncForm.dateRange = range.value()
+}
+
+// 开始批量同步
+const startBatchSync = async () => {
+  // 验证日期范围
+  if (!batchSyncForm.dateRange || batchSyncForm.dateRange.length !== 2) {
+    ElMessage.warning('请选择日期范围')
+    return
+  }
+
+  const [start, end] = batchSyncForm.dateRange
+
+  // 验证日期范围不超过3年
+  const daysDiff = dayjs(end).diff(dayjs(start), 'day')
+  if (daysDiff > 1095) {
+    ElMessage.warning('单次同步时间范围不能超过 3 年')
+    return
+  }
+
+  // 确保结束日期不早于开始日期
+  if (dayjs(end).isBefore(dayjs(start))) {
+    ElMessage.warning('结束日期不能早于开始日期')
+    return
+  }
+
+  batchSyncSubmitting.value = true
+
+  try {
+    // 调用批量同步 API
+    const response = await fetch('/api/mdvaes/batch-sync', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authStore.token}`
+      },
+      body: JSON.stringify({
+        start_date: start,
+        end_date: end
+      })
+    })
+
+    const result = await response.json()
+
+    if (result.success || result.task_id) {
+      ElMessage.success(`批量同步任务已启动，任务ID: ${result.task_id}`)
+
+      // 关闭批量同步对话框
+      batchSyncDialogVisible.value = false
+
+      // 等待一小段时间后，打开执行历史对话框并切换到手动操作历史标签
+      setTimeout(() => {
+        activeHistoryTab.value = 'manual'
+        historyDialogVisible.value = true
+        // 刷新历史列表以显示新任务
+        loadHistory()
+      }, 500)
+    } else {
+      throw new Error(result.message || '启动批量同步任务失败')
+    }
+  } catch (error: any) {
+    ElMessage.error(error.message || '启动批量同步任务失败')
+  } finally {
+    batchSyncSubmitting.value = false
+  }
+}
 
 const loadExecutions = async () => {
   executionLoading.value = true
@@ -1187,6 +1435,60 @@ onMounted(() => {
     margin-top: 20px;
     display: flex;
     justify-content: center;
+  }
+
+  // 批量同步对话框样式
+  .quick-ranges {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .estimate-info {
+    padding: 12px 16px;
+    background: var(--el-fill-color-light);
+    border-radius: 4px;
+    margin-bottom: 16px;
+
+    .info-label {
+      color: var(--el-text-color-secondary);
+      font-size: 13px;
+      margin-right: 8px;
+    }
+
+    .info-value {
+      font-weight: 500;
+      font-size: 14px;
+
+      &.highlight {
+        color: var(--el-color-warning);
+        font-weight: 600;
+      }
+    }
+  }
+
+  .tips {
+    font-size: 13px;
+    color: var(--el-text-color-secondary);
+    line-height: 1.6;
+
+    p {
+      margin: 4px 0;
+
+      &:first-child {
+        margin-top: 0;
+      }
+
+      &:last-child {
+        margin-bottom: 0;
+      }
+    }
+
+    .tip-icon {
+      margin-right: 4px;
+      color: var(--el-color-warning);
+    }
   }
 }
 </style>

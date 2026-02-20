@@ -12,12 +12,44 @@ async def create_mdvaes_collections():
 
     try:
         # 1. 分析师盈利预测
+        # 先删除旧索引，避免冲突
+        existing_indexes = await db.mdvaes_analyst_forecasts.list_indexes().to_list(None)
+        for idx in existing_indexes:
+            idx_name = idx.get("name")
+            if idx_name != "_id_":  # 保留默认的 _id 索引
+                await db.mdvaes_analyst_forecasts.drop_index(idx_name)
+                print(f"  🗑️ 删除旧索引: {idx_name}")
+
+        # 清理重复数据（保留最新的记录）
+        print("  🧹 清理重复数据...")
+        duplicate_count = 0
+        async for doc in db.mdvaes_analyst_forecasts.find().sort("synced_at", -1):
+            # 检查是否有相同 ts_code + report_date + org_name 的记录
+            query = {
+                "ts_code": doc["ts_code"],
+                "report_date": doc["report_date"],
+                "_id": {"$ne": doc["_id"]}  # 排除当前记录
+            }
+            if "org_name" in doc and doc["org_name"]:
+                query["org_name"] = doc["org_name"]
+
+            # 删除重复的旧记录
+            result = await db.mdvaes_analyst_forecasts.delete_many(query)
+            if result.deleted_count > 0:
+                duplicate_count += result.deleted_count
+
+        if duplicate_count > 0:
+            print(f"  ✅ 已删除 {duplicate_count} 条重复记录")
+        else:
+            print(f"  ℹ️ 没有发现重复数据")
+
+        # 创建新的唯一索引: ts_code + report_date + org_name
         await db.mdvaes_analyst_forecasts.create_index([
             ("ts_code", 1),
-            ("quarter", 1),
-            ("report_date", -1)
-        ])
-        print("✅ mdvaes_analyst_forecasts 索引创建完成")
+            ("report_date", 1),
+            ("org_name", 1)
+        ], unique=True, sparse=True)  # sparse=True 允许 org_name 为空的记录
+        print("✅ mdvaes_analyst_forecasts 索引创建完成 (ts_code + report_date + org_name)")
 
         # 2. EPS 历史数据
         await db.mdvaes_eps_history.create_index([

@@ -4,6 +4,7 @@ import logging
 import asyncio
 from typing import Optional
 from datetime import datetime, timedelta
+import pandas as pd
 import tushare as ts
 from app.core.config import settings
 from app.core.database import get_mongo_db
@@ -32,6 +33,12 @@ class MDVAESDataSyncService:
 
             # 3. 同步国债收益率
             await self._sync_bond_yield(db, trade_date)
+
+            # 4. 同步财务比率数据
+            await self._sync_financial_ratios(db, trade_date)
+
+            # 5. 同步 EPS 历史数据
+            await self._sync_eps_history(db, trade_date)
 
             logger.info(f"✅ MDVAES 数据同步完成: {trade_date}")
             return {
@@ -76,12 +83,17 @@ class MDVAESDataSyncService:
         if all_forecasts:
             # 批量插入（使用 upsert 避免重复）
             for record in all_forecasts:
+                # 构建唯一标识查询条件
+                query_filter = {
+                    "ts_code": record["ts_code"],
+                    "report_date": record["report_date"]
+                }
+                # 如果有 org_name，也加入查询条件以区分不同机构的报告
+                if "org_name" in record and record["org_name"]:
+                    query_filter["org_name"] = record["org_name"]
+
                 await db.mdvaes_analyst_forecasts.update_one(
-                    {
-                        "ts_code": record["ts_code"],
-                        "quarter": record["quarter"],
-                        "report_date": record["report_date"]
-                    },
+                    query_filter,
                     {
                         "$set": {
                             **record,
@@ -223,13 +235,6 @@ class MDVAESDataSyncService:
         logger.info(f"🚀 [批量同步] 开始同步历史数据: {start_date} 至 {end_date}")
 
         db = get_mongo_db()
-        results = {
-            "start_date": start_date,
-            "end_date": end_date,
-            "analyst_forecasts": {"synced": 0, "skipped": 0},
-            "pe_history": {"synced": 0, "skipped": 0},
-            "bond_rate": {"synced": 0, "skipped": 0}
-        }
 
         try:
             # 转换日期格式
@@ -246,8 +251,7 @@ class MDVAESDataSyncService:
             if job_id:
                 await self._update_progress(job_id, current_step, total_days * 3, "正在同步国债收益率")
             bond_result = await self._batch_sync_bond_yield(db, start_dt, end_dt)
-            results["bond_rate"] = bond_result
-            logger.info(f"  ✅ 国债收益率同步完成: 新增 {bond_result['synced']} 条")
+            logger.info(f"  ✅ 国债收益率同步完成: 新增 {bond_result['synced']} 条, 更新 {bond_result.get('updated', 0)} 条")
 
             # 2. 批量同步每日估值指标（一次性获取整个时间段）
             logger.info("📊 [批量同步] 开始同步每日估值指标...")
@@ -255,8 +259,7 @@ class MDVAESDataSyncService:
             if job_id:
                 await self._update_progress(job_id, current_step, total_days * 3, "正在同步每日估值指标")
             pe_result = await self._batch_sync_daily_basic(db, start_dt, end_dt)
-            results["pe_history"] = pe_result
-            logger.info(f"  ✅ 每日估值指标同步完成: 新增 {pe_result['synced']} 条")
+            logger.info(f"  ✅ 每日估值指标同步完成: 新增 {pe_result['synced']} 条, 更新 {pe_result.get('updated', 0)} 条")
 
             # 3. 批量同步分析师盈利预测（按报告日期逐个获取）
             logger.info("📊 [批量同步] 开始同步分析师盈利预测...")
@@ -264,8 +267,48 @@ class MDVAESDataSyncService:
             analyst_result = await self._batch_sync_analyst_forecasts(
                 db, start_dt, end_dt, job_id, total_days, current_step
             )
-            results["analyst_forecasts"] = analyst_result
-            logger.info(f"  ✅ 分析师预测同步完成: 新增 {analyst_result['synced']} 条")
+            logger.info(f"  ✅ 分析师预测同步完成: 新增 {analyst_result['synced']} 条, 更新 {analyst_result.get('updated', 0)} 条")
+
+            # 4. 批量同步财务比率数据
+            logger.info("📊 [批量同步] 开始同步财务比率数据...")
+            ratios_result = await self._batch_sync_financial_ratios(db, start_dt, end_dt)
+            logger.info(f"  ✅ 财务比率同步完成: 新增 {ratios_result['synced']} 条, 更新 {ratios_result.get('updated', 0)} 条")
+
+            # 5. 批量同步 EPS 历史数据
+            logger.info("📊 [批量同步] 开始同步 EPS 历史数据...")
+            eps_result = await self._batch_sync_eps_history(db, start_dt, end_dt)
+            logger.info(f"  ✅ EPS 历史同步完成: 新增 {eps_result['synced']} 条, 更新 {eps_result.get('updated', 0)} 条")
+
+            # 构建返回结果（保持向后兼容，将 updated 计入 skipped）
+            results = {
+                "start_date": start_date,
+                "end_date": end_date,
+                "analyst_forecasts": {
+                    "synced": analyst_result["synced"],
+                    "updated": analyst_result.get("updated", 0),
+                    "skipped": analyst_result["skipped"]
+                },
+                "pe_history": {
+                    "synced": pe_result["synced"],
+                    "updated": pe_result.get("updated", 0),
+                    "skipped": pe_result["skipped"]
+                },
+                "bond_rate": {
+                    "synced": bond_result["synced"],
+                    "updated": bond_result.get("updated", 0),
+                    "skipped": bond_result["skipped"]
+                },
+                "financial_ratios": {
+                    "synced": ratios_result["synced"],
+                    "updated": ratios_result.get("updated", 0),
+                    "skipped": ratios_result["skipped"]
+                },
+                "eps_history": {
+                    "synced": eps_result["synced"],
+                    "updated": eps_result.get("updated", 0),
+                    "skipped": eps_result["skipped"]
+                }
+            }
 
             logger.info(f"✅ [批量同步] 历史数据同步完成")
             return results
@@ -291,8 +334,9 @@ class MDVAESDataSyncService:
             end_date=end_date_str
         )
 
-        synced = 0
-        skipped = 0
+        synced = 0  # 新插入的记录数
+        updated = 0  # 更新的记录数
+        skipped = 0  # 跳过的记录数（数据缺失）
 
         if not df.empty:
             logger.info(f"📊 开始处理国债收益率数据，共 {len(df)} 条记录")
@@ -307,12 +351,14 @@ class MDVAESDataSyncService:
 
                 if not date_str:
                     logger.warning(f"跳过缺少日期字段的记录: {record}")
+                    skipped += 1
                     continue
 
                 try:
                     trade_date = datetime.strptime(str(date_str), "%Y%m%d").strftime("%Y%m%d")
                 except ValueError as e:
                     logger.error(f"日期解析失败: date_str='{date_str}', record={record}, error={e}")
+                    skipped += 1
                     continue
 
                 result = await db.mdvaes_bond_rate.update_one(
@@ -332,31 +378,51 @@ class MDVAESDataSyncService:
                 if result.upserted_id:
                     synced += 1
                 else:
-                    skipped += 1
+                    updated += 1
 
-        return {"synced": synced, "skipped": skipped}
+        # 返回格式：synced=新增, updated=更新, skipped=跳过（兼容前端，将updated计入skipped）
+        return {"synced": synced, "updated": updated, "skipped": skipped}
 
     async def _batch_sync_daily_basic(self, db, start_dt: datetime, end_dt: datetime):
         """批量同步每日估值指标
 
-        优化：一次性获取整个时间段的数据
+        注意：由于 Tushare API 的积分限制，start_date/end_date 参数可能只返回最近几天的数据。
+        解决方案：逐日调用 API 获取完整的历史数据。
         """
-        start_date_str = start_dt.strftime("%Y%m%d")
-        end_date_str = end_dt.strftime("%Y%m%d")
+        # 生成日期列表（只包括工作日，避免无用的周末调用）
+        date_list = []
+        current = start_dt
+        while current <= end_dt:
+            # 简单的周末检测（周一=0, 周日=6）
+            if current.weekday() < 5:  # 0-4 是周一到周五
+                date_list.append(current.strftime("%Y%m%d"))
+            current = current + timedelta(days=1)
 
-        df = await asyncio.to_thread(
-            self.pro.daily_basic,
-            ts_code="",
-            start_date=start_date_str,
-            end_date=end_date_str,
-            fields="ts_code,trade_date,pe,pe_ttm,pb,ps"
-        )
+        logger.info(f"  📅 计划同步 {len(date_list)} 个工作日")
 
-        synced = 0
-        skipped = 0
+        synced = 0  # 新插入的记录数
+        updated = 0  # 更新的记录数
+        skipped_dates = 0  # 跳过的日期数（无数据）
 
-        if not df.empty:
-            # 使用 bulk_write 批量插入提高性能
+        # 逐日获取数据
+        for idx, trade_date in enumerate(date_list, 1):
+            logger.info(f"  📡 [{idx}/{len(date_list)}] 获取 {trade_date} 的数据...")
+
+            df = await asyncio.to_thread(
+                self.pro.daily_basic,
+                ts_code="",
+                trade_date=trade_date,
+                fields="ts_code,trade_date,pe,pe_ttm,pb,ps"
+            )
+
+            if df.empty:
+                logger.warning(f"    ⚠️ {trade_date} 无数据（可能是节假日或停牌）")
+                skipped_dates += 1
+                continue
+
+            logger.info(f"    📊 {trade_date} 返回 {len(df)} 条记录")
+
+            # 使用 bulk_write 批量插入
             from pymongo import UpdateOne
 
             operations = []
@@ -385,9 +451,15 @@ class MDVAESDataSyncService:
                 batch = operations[i:i + batch_size]
                 result = await db.mdvaes_pe_history.bulk_write(batch, ordered=False)
                 synced += result.upserted_count
-                skipped += result.modified_count
+                updated += result.modified_count
 
-        return {"synced": synced, "skipped": skipped}
+            # 每日存储完成后打印日志
+            logger.info(f"    ✅ {trade_date}: 新增 {result.upserted_count} 条, 更新 {result.modified_count} 条")
+
+        logger.info(f"  ✅ PE历史同步完成: 新增 {synced} 条, 更新 {updated} 条, 跳过 {skipped_dates} 个日期")
+
+        # 返回格式：synced=新增, updated=更新, skipped=跳过的日期数
+        return {"synced": synced, "updated": updated, "skipped": skipped_dates}
 
     async def _batch_sync_analyst_forecasts(
         self, db, start_dt: datetime, end_dt: datetime,
@@ -395,68 +467,129 @@ class MDVAESDataSyncService:
     ):
         """批量同步分析师盈利预测
 
-        优化：获取指定时间段内的所有报告日期
-        注意：分析师预测数据较少，按季度获取
+        重要说明：
+        - report_rc 接口返回的是分析师盈利预测研报
+        - report_date：研报发布日期（YYYYMMDD 格式）
+        - org_name：机构名称
+
+        策略：
+        - 使用 report_date 字段获取指定日期范围内发布的研报
+        - 起始日期往前推 120 天，以确保获取到该期间开始前发布的预测
+        - 唯一标识：ts_code + report_date + org_name（区分不同机构的报告）
         """
-        # 获取该时间段内的所有季度
-        quarters = []
-        current = end_dt
-        while current >= start_dt:
-            year = current.year
-            quarter = (current.month - 1) // 3 + 1
-            quarters.append(f"{year}Q{quarter}")
-            current = current.replace(month=1, day=1) - timedelta(days=1)
+        synced = 0  # 新插入的记录数
+        updated = 0  # 更新的记录数
+        skipped = 0  # 跳过的记录数
 
-        # 去重并排序
-        quarters = sorted(set(quarters), reverse=True)
+        # 起始日期往前推 120 天（约4个月）
+        start_dt_adjusted = start_dt - timedelta(days=120)
+        start_date_str = start_dt_adjusted.strftime("%Y%m%d")
+        end_date_str = end_dt.strftime("%Y%m%d")
 
-        synced = 0
-        skipped = 0
-        total_quarters = len(quarters)
+        logger.info(f"  📅 用户选择日期范围: {start_dt.strftime('%Y-%m-%d')} 至 {end_dt.strftime('%Y-%m-%d')}")
+        logger.info(f"  📅 实际获取研报发布日期范围: {start_date_str} 至 {end_date_str} (往前推120天)")
 
-        for i, quarter in enumerate(quarters):
-            # 更新进度
-            if job_id:
-                progress = int(base_step + (i / total_quarters) * total_steps)
-                await self._update_progress(
-                    job_id, progress, total_steps * 3,
-                    f"正在同步分析师预测: {quarter} ({i+1}/{total_quarters})"
-                )
-
-            # 获取该季度的所有报告
-            # 注意：Tushare report_rc 接口需要用 period 参数获取季度数据
-            df = await asyncio.to_thread(
-                self.pro.report_rc,
-                period=quarter,
-                offset=0,
-                limit=5000
+        # 更新进度
+        if job_id:
+            await self._update_progress(
+                job_id, base_step, total_steps * 3,
+                f"正在同步分析师预测: {start_date_str} 至 {end_date_str}"
             )
 
-            if not df.empty:
-                for _, row in df.iterrows():
-                    record = row.to_dict()
+        # 获取指定日期范围内发布的所有报告
+        all_forecasts = []
+        offset = 0
+        limit = 3000
+        page = 1
 
-                    result = await db.mdvaes_analyst_forecasts.update_one(
-                        {
-                            "ts_code": record["ts_code"],
-                            "quarter": record["quarter"],
-                            "report_date": record["report_date"]
-                        },
-                        {
-                            "$set": {
-                                **record,
-                                "synced_at": datetime.now()
-                            }
-                        },
-                        upsert=True
-                    )
+        while True:
+            logger.info(f"  📡 [第{page}页] 获取数据 (offset={offset})...")
 
-                    if result.upserted_id:
-                        synced += 1
-                    else:
-                        skipped += 1
+            # 使用 ann_date 参数获取指定日期范围的数据
+            df = await asyncio.to_thread(
+                self.pro.report_rc,
+                start_date=start_date_str,
+                end_date=end_date_str,
+                offset=offset,
+                limit=limit
+            )
 
-        return {"synced": synced, "skipped": skipped}
+            if df.empty:
+                logger.info(f"    ⚠️ 第{page}页无数据，停止获取")
+                break
+
+            logger.info(f"    📊 第{page}页返回 {len(df)} 条记录")
+
+            # 打印样本数据
+            for idx in range(min(2, len(df))):
+                sample = df.iloc[idx].to_dict()
+                logger.info(f"    样本 {idx+1}: ts_code={sample.get('ts_code')}, org_name={sample.get('org_name')}, report_date={sample.get('report_date')}")
+
+            all_forecasts.append(df)
+            offset += limit
+
+            if len(df) < limit:
+                logger.info(f"    ✅ 已获取全部数据")
+                break
+
+            page += 1
+
+        # 合并所有数据
+        if not all_forecasts:
+            logger.warning(f"  ⚠️ 指定日期范围内无分析师预测报告")
+            return {"synced": 0, "updated": 0, "skipped": 0}
+
+        import pandas as pd
+        df_all = pd.concat(all_forecasts, ignore_index=True)
+        logger.info(f"  📊 总共获取 {len(df_all)} 条记录")
+
+        # 处理每条记录
+        for idx, (_, row) in enumerate(df_all.iterrows()):
+            record = row.to_dict()
+
+            # 验证必填字段
+            if "ts_code" not in record or "report_date" not in record:
+                logger.warning(f"    ⚠️ 记录 {idx+1} 缺少必填字段 (ts_code, report_date): {list(record.keys())}")
+                skipped += 1
+                continue
+
+            # 构建唯一标识查询条件
+            query_filter = {
+                "ts_code": record["ts_code"],
+                "report_date": record["report_date"]
+            }
+            # 如果有 org_name，也加入查询条件以区分不同机构的报告
+            if "org_name" in record and record["org_name"]:
+                query_filter["org_name"] = record["org_name"]
+
+            # 执行 upsert
+            try:
+                result = await db.mdvaes_analyst_forecasts.update_one(
+                    query_filter,
+                    {
+                        "$set": {
+                            **record,
+                            "synced_at": datetime.now()
+                        }
+                    },
+                    upsert=True
+                )
+
+                if result.upserted_id:
+                    synced += 1
+                    if synced % 100 == 0:
+                        logger.info(f"    进度: 新增 {synced} 条, 更新 {updated} 条")
+                else:
+                    updated += 1
+
+            except Exception as e:
+                logger.error(f"    ❌ 存储记录 {idx+1} 失败: {e}, record={record}")
+                skipped += 1
+
+        logger.info(f"  ✅ 分析师预测同步完成: 新增 {synced} 条, 更新 {updated} 条, 跳过 {skipped} 条")
+
+        # 返回格式：synced=新增, updated=更新, skipped=跳过
+        return {"synced": synced, "updated": updated, "skipped": skipped}
 
     async def _update_progress(self, job_id: str, progress: int, total_items: int, message: str):
         """更新任务进度
@@ -486,6 +619,212 @@ class MDVAESDataSyncService:
             )
         except Exception as e:
             logger.warning(f"更新进度失败: {e}")
+
+    async def _sync_financial_ratios(self, db, trade_date: str):
+        """同步财务比率数据
+
+        注意：财务数据是季度/年度发布的，不是每日更新。
+        每日同步只检查是否需要更新，实际数据通过批量同步获取。
+        """
+        logger.debug(f"  📊 跳过财务比率每日同步: {trade_date}（财务数据非每日更新）")
+        # 财务数据不是每日更新的，跳过每日同步
+        # 使用批量同步来获取历史财务数据
+        return
+
+    async def _sync_eps_history(self, db, trade_date: str):
+        """同步 EPS 历史数据
+
+        注意：EPS 数据是季度/年度发布的，不是每日更新。
+        每日同步只检查是否需要更新，实际数据通过批量同步获取。
+        """
+        logger.debug(f"  📊 跳过 EPS 历史每日同步: {trade_date}（EPS 数据非每日更新）")
+        # EPS 数据不是每日更新的，跳过每日同步
+        # 使用批量同步来获取历史 EPS 数据
+        return
+
+    async def _batch_sync_financial_ratios(self, db, start_dt: datetime, end_dt: datetime):
+        """批量同步财务比率数据
+
+        策略：
+        1. 先获取股票列表
+        2. 分批查询（每次100只股票）避免 API 限制
+        3. 使用 start_date/end_date 参数获取日期范围内的数据
+        """
+        synced = 0  # 新插入的记录数
+        updated = 0  # 更新的记录数
+        skipped = 0  # 跳过的年份数（无数据）
+
+        # 1. 获取股票列表
+        logger.info("  📋 获取股票列表...")
+        stock_df = await asyncio.to_thread(
+            self.pro.stock_basic,
+            list_status='L',
+            fields='ts_code,symbol,name'
+        )
+
+        if stock_df.empty:
+            logger.error("  ❌ 无法获取股票列表")
+            return {"synced": 0, "updated": 0, "skipped": 0}
+
+        stock_codes = stock_df['ts_code'].tolist()
+        logger.info(f"  ✅ 获取到 {len(stock_codes)} 只股票")
+
+        # 2. 生成年份列表
+        years = []
+        current = start_dt
+        while current.year <= end_dt.year:
+            years.append(current.year)
+            current = current.replace(year=current.year + 1, month=1, day=1)
+
+        logger.info(f"  📅 计划同步 {len(years)} 个年份的财务比率数据")
+
+        # 3. 按年份和股票批次同步
+        batch_size = 100  # 每次查询100只股票
+
+        for year in years:
+            year_start = f"{year}0101"
+            year_end = f"{year}1231"
+            logger.info(f"  📡 获取 {year} 年的财务比率数据...")
+
+            for i in range(0, len(stock_codes), batch_size):
+                batch_codes = stock_codes[i:i + batch_size]
+                ts_codes_str = ",".join(batch_codes)
+
+                try:
+                    df = await asyncio.to_thread(
+                        self.pro.fina_indicator,
+                        ts_code=ts_codes_str,
+                        start_date=year_start,
+                        end_date=year_end,
+                        fields="ts_code,ann_date,end_date,debt_to_assets,current_ratio,quick_ratio,roe,roa"
+                    )
+
+                    if df.empty:
+                        continue
+
+                    logger.info(f"    📊 {year} 年 批次 {i//batch_size + 1}: 返回 {len(df)} 条记录")
+
+                    from pymongo import UpdateOne
+                    operations = []
+                    for _, row in df.iterrows():
+                        record = row.to_dict()
+                        # 过滤掉 NaN 值
+                        filtered_record = {k: v for k, v in record.items()
+                                         if pd.notna(v) and k in ['ts_code', 'ann_date', 'end_date',
+                                                                   'debt_to_assets', 'current_ratio',
+                                                                   'quick_ratio', 'roe', 'roa']}
+                        if 'ts_code' in filtered_record and 'end_date' in filtered_record:
+                            operations.append(
+                                UpdateOne(
+                                    {"ts_code": filtered_record["ts_code"], "end_date": filtered_record["end_date"]},
+                                    {"$set": {**filtered_record, "synced_at": datetime.now()}},
+                                    upsert=True
+                                )
+                            )
+
+                    if operations:
+                        result = await db.mdvaes_financial_ratios.bulk_write(operations, ordered=False)
+                        synced += result.upserted_count
+                        updated += result.modified_count
+                        logger.info(f"    ✅ 新增 {result.upserted_count} 条, 更新 {result.modified_count} 条")
+
+                except Exception as e:
+                    logger.error(f"    ❌ {year} 年 批次 {i//batch_size + 1} 同步失败: {e}")
+                    skipped += 1
+
+        logger.info(f"  ✅ 财务比率同步完成: 新增 {synced} 条, 更新 {updated} 条, 跳过 {skipped} 个批次")
+        return {"synced": synced, "updated": updated, "skipped": skipped}
+
+    async def _batch_sync_eps_history(self, db, start_dt: datetime, end_dt: datetime):
+        """批量同步 EPS 历史数据
+
+        策略：
+        1. 先获取股票列表
+        2. 分批查询（每次100只股票）避免 API 限制
+        3. 使用 start_date/end_date 参数获取日期范围内的数据
+        """
+        synced = 0
+        updated = 0
+        skipped = 0
+
+        # 1. 获取股票列表
+        logger.info("  📋 获取股票列表...")
+        stock_df = await asyncio.to_thread(
+            self.pro.stock_basic,
+            list_status='L',
+            fields='ts_code,symbol,name'
+        )
+
+        if stock_df.empty:
+            logger.error("  ❌ 无法获取股票列表")
+            return {"synced": 0, "updated": 0, "skipped": 0}
+
+        stock_codes = stock_df['ts_code'].tolist()
+        logger.info(f"  ✅ 获取到 {len(stock_codes)} 只股票")
+
+        # 2. 生成年份列表
+        years = []
+        current = start_dt
+        while current.year <= end_dt.year:
+            years.append(current.year)
+            current = current.replace(year=current.year + 1, month=1, day=1)
+
+        logger.info(f"  📅 计划同步 {len(years)} 个年份的 EPS 历史数据")
+
+        # 3. 按年份和股票批次同步
+        batch_size = 100  # 每次查询100只股票
+
+        for year in years:
+            year_start = f"{year}0101"
+            year_end = f"{year}1231"
+            logger.info(f"  📡 获取 {year} 年的 EPS 数据...")
+
+            for i in range(0, len(stock_codes), batch_size):
+                batch_codes = stock_codes[i:i + batch_size]
+                ts_codes_str = ",".join(batch_codes)
+
+                try:
+                    df = await asyncio.to_thread(
+                        self.pro.fina_indicator,
+                        ts_code=ts_codes_str,
+                        start_date=year_start,
+                        end_date=year_end,
+                        fields="ts_code,ann_date,end_date,eps,dt_eps"
+                    )
+
+                    if df.empty:
+                        continue
+
+                    logger.info(f"    📊 {year} 年 批次 {i//batch_size + 1}: 返回 {len(df)} 条记录")
+
+                    from pymongo import UpdateOne
+                    operations = []
+                    for _, row in df.iterrows():
+                        record = row.to_dict()
+                        # 过滤掉 NaN 值
+                        filtered_record = {k: v for k, v in record.items()
+                                         if pd.notna(v) and k in ['ts_code', 'ann_date', 'end_date', 'eps', 'dt_eps']}
+                        if 'ts_code' in filtered_record and 'end_date' in filtered_record:
+                            operations.append(
+                                UpdateOne(
+                                    {"ts_code": filtered_record["ts_code"], "end_date": filtered_record["end_date"]},
+                                    {"$set": {**filtered_record, "synced_at": datetime.now()}},
+                                    upsert=True
+                                )
+                            )
+
+                    if operations:
+                        result = await db.mdvaes_eps_history.bulk_write(operations, ordered=False)
+                        synced += result.upserted_count
+                        updated += result.modified_count
+                        logger.info(f"    ✅ 新增 {result.upserted_count} 条, 更新 {result.modified_count} 条")
+
+                except Exception as e:
+                    logger.error(f"    ❌ {year} 年 批次 {i//batch_size + 1} 同步失败: {e}")
+                    skipped += 1
+
+        logger.info(f"  ✅ EPS 历史同步完成: 新增 {synced} 条, 更新 {updated} 条, 跳过 {skipped} 个批次")
+        return {"synced": synced, "updated": updated, "skipped": skipped}
 
 
 # 全局服务实例

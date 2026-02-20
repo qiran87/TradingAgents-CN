@@ -62,7 +62,7 @@ class MDVAESService:
             growth_metrics = self.growth_calculator.calculate(eps_forecasts)
 
             # 4. 获取当前数据
-            db = await get_mongo_db()
+            db = get_mongo_db()
             current_eps = eps_forecasts[0].eps_forecast
 
             current_pe = await self.data_reader.get_current_pe(db, symbol, calculation_date)
@@ -72,14 +72,28 @@ class MDVAESService:
             # 5. 获取国债利率
             bond_rate = await self.data_reader.get_bond_rate(calculation_date)
 
-            # 6. 构建风险指标（简化版）
-            risk_metrics = RiskMetrics(
-                debt_to_assets=0.5,
-                current_ratio=1.5,
-                quick_ratio=1.2,
-                cashflow_to_income=1.1,
-                risk_level=RiskLevel.MEDIUM
-            )
+            # 6. 获取财务比率数据
+            ratios_data = await self.data_reader.get_financial_ratios(symbol, calculation_date)
+
+            # 7. 构建风险指标
+            if ratios_data:
+                # 使用数据库中的实际数据
+                risk_metrics = RiskMetrics(
+                    debt_to_assets=ratios_data.get("debt_to_assets", 0.5),
+                    current_ratio=ratios_data.get("current_ratio", 1.5),
+                    quick_ratio=ratios_data.get("quick_ratio", 1.2),
+                    cashflow_to_income=1.1,  # 暂时保持默认值
+                    risk_level=RiskLevel.MEDIUM
+                )
+            else:
+                # 使用默认值
+                risk_metrics = RiskMetrics(
+                    debt_to_assets=0.5,
+                    current_ratio=1.5,
+                    quick_ratio=1.2,
+                    cashflow_to_income=1.1,
+                    risk_level=RiskLevel.MEDIUM
+                )
 
             # 7. 计算估值
             valuation_result = self.valuation_calculator.calculate(
@@ -153,7 +167,7 @@ class MDVAESService:
 
     async def get_cache_status(self) -> CacheStatusResponse:
         """获取缓存状态"""
-        db = await get_mongo_db()
+        db = get_mongo_db()
 
         # 统计缓存条目
         total_entries = await db.mdvaes_valuation_cache.count_documents({})
