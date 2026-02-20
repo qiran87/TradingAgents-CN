@@ -295,15 +295,25 @@ class MDVAESDataSyncService:
         skipped = 0
 
         if not df.empty:
-            for _, row in df.iterrows():
+            logger.info(f"📊 开始处理国债收益率数据，共 {len(df)} 条记录")
+            for idx, row in df.iterrows():
                 record = row.to_dict()
+                logger.debug(f"处理记录 {idx+1}/{len(df)}: {list(record.keys())}")
+
                 # 处理日期字段：优先使用 date 字段，其次使用其他可能的字段名
                 date_str = record.get("date") or record.get("trade_date") or record.get("cal_date")
+
+                logger.debug(f"日期字段值: date={record.get('date')}, trade_date={record.get('trade_date')}, cal_date={record.get('cal_date')}, date_str={date_str}")
+
                 if not date_str:
                     logger.warning(f"跳过缺少日期字段的记录: {record}")
                     continue
 
-                trade_date = datetime.strptime(str(date_str), "%Y%m%d").strftime("%Y%m%d")
+                try:
+                    trade_date = datetime.strptime(str(date_str), "%Y%m%d").strftime("%Y%m%d")
+                except ValueError as e:
+                    logger.error(f"日期解析失败: date_str='{date_str}', record={record}, error={e}")
+                    continue
 
                 result = await db.mdvaes_bond_rate.update_one(
                     {
