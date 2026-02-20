@@ -587,20 +587,125 @@
       :close-on-click-modal="false"
     >
       <el-alert
-        title="说明"
+        title="📊 MDVAES 历史数据说明"
         type="info"
         :closable="false"
         show-icon
         style="margin-bottom: 20px"
       >
         <template #default>
-          <div>用于补充缺失的 MDVAES 历史数据，包括：</div>
-          <ul style="margin: 8px 0 0 20px; padding-left: 20px;">
-            <li>分析师盈利预测数据</li>
-            <li>每日估值指标（PE/PB/PS）</li>
-            <li>10年期国债收益率</li>
-          </ul>
-          <div style="margin-top: 8px;">⚠️ 建议在非交易时间进行大范围同步</div>
+          <div style="line-height: 1.8;">
+            <p><strong>同步功能：</strong>补充缺失的 MDVAES 模型所需的历史数据，确保估值计算准确性。</p>
+
+            <div style="margin-top: 12px;">
+              <el-divider content-position="left">
+                <strong>📋 同步数据表详情</strong>
+              </el-divider>
+
+              <el-collapse style="margin-top: 12px; border: none;">
+                <el-collapse-item title="1️⃣ mdvaes_analyst_forecasts（分析师盈利预测）" name="1">
+                  <ul style="margin: 8px 0 0 20px; padding-left: 20px; line-height: 1.6;">
+                    <li><strong>数据来源：</strong>Tushare pro.fina_indicator（财务指标接口）</li>
+                    <li><strong>同步字段：</strong>
+                      <ul style="margin: 4px 0 0 8px; padding-left: 20px;">
+                        <li>ts_code - 股票代码（如 000001.SZ）</li>
+                        <li>report_date - 研报发布日期（YYYYMMDD格式）</li>
+                        <li>quarter - 预测季度（如 2024Q1、2024Q2）</li>
+                        <li>eps - EPS预测值（每股收益）</li>
+                      </ul>
+                    </li>
+                    <li><strong>用途：</strong>优先用于EPS预测（比历史外推更准确）</li>
+                    <li><strong>更新频率：</strong>季度/年度更新</li>
+                  </ul>
+                </el-collapse-item>
+
+                <el-collapse-item title="2️⃣ mdvaes_pe_history（PE历史数据）" name="2">
+                  <ul style="margin: 8px 0 0 20px; padding-left: 20px; line-height: 1.6;">
+                    <li><strong>数据来源：</strong>Tushare pro.daily_basic（日线行情接口）</li>
+                    <li><strong>同步字段：</strong>
+                      <ul style="margin: 4px 0 0 8px; padding-left: 20px;">
+                        <li>ts_code - 股票代码</li>
+                        <li>trade_date - 交易日期（YYYYMMDD格式）</li>
+                        <li>pe_ttm - 滚动市盈率（股价 / 最近12个月EPS）</li>
+                        <li>turnover_rate - 换手率</li>
+                        <li>volume_ratio - 量比</li>
+                      </ul>
+                    </li>
+                    <li><strong>用途：</strong>用于估值时的当前PE参数</li>
+                    <li><strong>更新频率：</strong>每个交易日更新</li>
+                  </ul>
+                </el-collapse-item>
+
+                <el-collapse-item title="3️⃣ mdvaes_bond_rate（国债收益率）" name="3">
+                  <ul style="margin: 8px 0 0 20px; padding-left: 20px; line-height: 1.6;">
+                    <li><strong>数据来源：</strong>Tushare pro.yc_cb（国债期货收益率曲线）</li>
+                    <li><strong>同步字段：</strong>
+                      <ul style="margin: 4px 0 0 8px; padding-left: 20px;">
+                        <li>trade_date - 交易日期</li>
+                        <li>curve_term - 期限（固定10.0）</li>
+                        <li>yield - 收益率（百分比，如2.75表示2.75%）</li>
+                      </ul>
+                    </li>
+                    <li><strong>用途：</strong>用于估值时的无风险利率参数</li>
+                    <li><strong>更新频率：</strong>每个交易日更新</li>
+                  </ul>
+                </el-collapse-item>
+
+                <el-collapse-item title="4️⃣ mdvaes_financial_ratios（财务比率数据）" name="4">
+                  <ul style="margin: 8px 0 0 20px; padding-left: 20px; line-height: 1.6;">
+                    <li><strong>数据来源：</strong>Tushare pro.fina_indicator（财务指标接口）</li>
+                    <li><strong>同步字段：</strong>
+                      <ul style="margin: 4px 0 0 8px; padding-left: 20px;">
+                        <li>ts_code - 股票代码</li>
+                        <li>ann_date - 公告日期（YYYYMMDD格式）</li>
+                        <li>end_date - 报告期（YYYYMMDD格式，如20231231）</li>
+                        <li>debt_to_assets - 资产负债率（百分比）</li>
+                        <li>current_ratio - 流动比率</li>
+                        <li>quick_ratio - 速动比率</li>
+                        <li>roe - 净资产收益率（ROE）</li>
+                        <li>roa - 总资产收益率（ROA）</li>
+                      </ul>
+                    </li>
+                    <li><strong>用途：</strong>用于风险评估（资产负债率、流动性等）</li>
+                    <li><strong>更新频率：</strong>季度/年度更新</li>
+                  </ul>
+                </el-collapse-item>
+
+                <el-collapse-item title="5️⃣ mdvaes_eps_history（EPS历史数据）" name="5">
+                  <ul style="margin: 8px 0 0 20px; padding-left: 20px; line-height: 1.6;">
+                    <li><strong>数据来源：</strong>Tushare pro.fina_indicator（财务指标接口）</li>
+                    <li><strong>同步字段：</strong>
+                      <ul style="margin: 4px 0 0 8px; padding-left: 20px;">
+                        <li>ts_code - 股票代码</li>
+                        <li>ann_date - 公告日期（YYYYMMDD格式）</li>
+                        <li>end_date - 报告期（YYYYMMDD格式，如20231231）</li>
+                        <li>eps - 基本每股收益</li>
+                        <li>dt_eps - 稀释每股收益</li>
+                      </ul>
+                    </li>
+                    <li><strong>用途：</strong>用于历史EPS外推（当无分析师预测时使用）</li>
+                    <li><strong>更新频率：</strong>季度/年度更新</li>
+                  </ul>
+                </el-collapse-item>
+              </el-collapse>
+            </div>
+
+            <div style="margin-top: 12px;">
+              <el-divider content-position="left">
+                <strong>⚡ 同步策略</strong>
+              </el-divider>
+              <ul style="margin: 8px 0 0 0; padding-left: 20px; line-height: 1.6;">
+                <li><strong>按年份批量同步：</strong>支持多年度数据同步（如2020-2023）</li>
+                <li><strong>智能去重：</strong>使用 upsert 策略，已存在数据自动跳过</li>
+                <li><strong>批次处理：</strong>每批100只股票，避免API超时</li>
+                <li><strong>过滤无效值：</strong>自动过滤 NaN 值，只存储有效数据</li>
+              </ul>
+            </div>
+
+            <div style="margin-top: 12px; padding: 8px; background: #fff3cd; border-radius: 4px; border-left: 3px solid #ffc107;">
+              <p style="margin: 0; color: #664d03;"><strong>⚠️ 建议：</strong>在非交易时间进行大范围同步，避免影响交易时段的系统性能。</p>
+            </div>
+          </div>
         </template>
       </el-alert>
 
