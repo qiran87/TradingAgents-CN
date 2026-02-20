@@ -204,6 +204,273 @@ class MDVAESDataSyncService:
             }
         }
 
+    async def batch_sync_historical_data(
+        self,
+        start_date: str,
+        end_date: str,
+        job_id: str = None
+    ):
+        """批量同步历史数据
+
+        Args:
+            start_date: 开始日期 YYYY-MM-DD
+            end_date: 结束日期 YYYY-MM-DD
+            job_id: 任务ID（用于进度报告）
+
+        Returns:
+            同步结果统计
+        """
+        logger.info(f"🚀 [批量同步] 开始同步历史数据: {start_date} 至 {end_date}")
+
+        db = await get_mongo_db()
+        results = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "analyst_forecasts": {"synced": 0, "skipped": 0},
+            "pe_history": {"synced": 0, "skipped": 0},
+            "bond_rate": {"synced": 0, "skipped": 0}
+        }
+
+        try:
+            # 转换日期格式
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
+            # 总天数估算
+            total_days = (end_dt - start_dt).days + 1
+            current_step = 0
+
+            # 1. 批量同步国债收益率（一次性获取整个时间段）
+            logger.info("📊 [批量同步] 开始同步国债收益率...")
+            current_step = 1
+            if job_id:
+                await self._update_progress(job_id, current_step, total_days * 3, "正在同步国债收益率")
+            bond_result = await self._batch_sync_bond_yield(db, start_dt, end_dt)
+            results["bond_rate"] = bond_result
+            logger.info(f"  ✅ 国债收益率同步完成: 新增 {bond_result['synced']} 条")
+
+            # 2. 批量同步每日估值指标（一次性获取整个时间段）
+            logger.info("📊 [批量同步] 开始同步每日估值指标...")
+            current_step = total_days
+            if job_id:
+                await self._update_progress(job_id, current_step, total_days * 3, "正在同步每日估值指标")
+            pe_result = await self._batch_sync_daily_basic(db, start_dt, end_dt)
+            results["pe_history"] = pe_result
+            logger.info(f"  ✅ 每日估值指标同步完成: 新增 {pe_result['synced']} 条")
+
+            # 3. 批量同步分析师盈利预测（按报告日期逐个获取）
+            logger.info("📊 [批量同步] 开始同步分析师盈利预测...")
+            # 分析师预测按报告日期获取，从结束日期倒推获取最近的报告日期
+            analyst_result = await self._batch_sync_analyst_forecasts(
+                db, start_dt, end_dt, job_id, total_days, current_step
+            )
+            results["analyst_forecasts"] = analyst_result
+            logger.info(f"  ✅ 分析师预测同步完成: 新增 {analyst_result['synced']} 条")
+
+            logger.info(f"✅ [批量同步] 历史数据同步完成")
+            return results
+
+        except Exception as e:
+            logger.error(f"❌ [批量同步] 历史数据同步失败: {e}", exc_info=True)
+            raise
+
+    async def _batch_sync_bond_yield(self, db, start_dt: datetime, end_dt: datetime):
+        """批量同步国债收益率
+
+        优化：一次性获取整个时间段的数据
+        """
+        start_date_str = start_dt.strftime("%Y%m%d")
+        end_date_str = end_dt.strftime("%Y%m%d")
+
+        df = await asyncio.to_thread(
+            self.pro.yc_cb,
+            ts_code="1001.CB",
+            curve_type="0",
+            curve_term=10.0,
+            start_date=start_date_str,
+            end_date=end_date_str
+        )
+
+        synced = 0
+        skipped = 0
+
+        if not df.empty:
+            for _, row in df.iterrows():
+                record = row.to_dict()
+                trade_date = datetime.strptime(record.get("date", ""), "%Y%m%d").strftime("%Y%m%d")
+
+                result = await db.mdvaes_bond_rate.update_one(
+                    {
+                        "trade_date": trade_date,
+                        "curve_term": 10.0
+                    },
+                    {
+                        "$set": {
+                            **record,
+                            "synced_at": datetime.now()
+                        }
+                    },
+                    upsert=True
+                )
+
+                if result.upserted_id:
+                    synced += 1
+                else:
+                    skipped += 1
+
+        return {"synced": synced, "skipped": skipped}
+
+    async def _batch_sync_daily_basic(self, db, start_dt: datetime, end_dt: datetime):
+        """批量同步每日估值指标
+
+        优化：一次性获取整个时间段的数据
+        """
+        start_date_str = start_dt.strftime("%Y%m%d")
+        end_date_str = end_dt.strftime("%Y%m%d")
+
+        df = await asyncio.to_thread(
+            self.pro.daily_basic,
+            ts_code="",
+            start_date=start_date_str,
+            end_date=end_date_str,
+            fields="ts_code,trade_date,pe,pe_ttm,pb,ps"
+        )
+
+        synced = 0
+        skipped = 0
+
+        if not df.empty:
+            # 使用 bulk_write 批量插入提高性能
+            from pymongo import UpdateOne
+
+            operations = []
+            for _, row in df.iterrows():
+                record = row.to_dict()
+
+                operations.append(
+                    UpdateOne(
+                        {
+                            "ts_code": record["ts_code"],
+                            "trade_date": record["trade_date"]
+                        },
+                        {
+                            "$set": {
+                                **record,
+                                "synced_at": datetime.now()
+                            }
+                        },
+                        upsert=True
+                    )
+                )
+
+            # 分批执行（每 1000 条）
+            batch_size = 1000
+            for i in range(0, len(operations), batch_size):
+                batch = operations[i:i + batch_size]
+                result = await db.mdvaes_pe_history.bulk_write(batch, ordered=False)
+                synced += result.upserted_count
+                skipped += result.modified_count
+
+        return {"synced": synced, "skipped": skipped}
+
+    async def _batch_sync_analyst_forecasts(
+        self, db, start_dt: datetime, end_dt: datetime,
+        job_id: str, total_steps: int, base_step: int
+    ):
+        """批量同步分析师盈利预测
+
+        优化：获取指定时间段内的所有报告日期
+        注意：分析师预测数据较少，按季度获取
+        """
+        # 获取该时间段内的所有季度
+        quarters = []
+        current = end_dt
+        while current >= start_dt:
+            year = current.year
+            quarter = (current.month - 1) // 3 + 1
+            quarters.append(f"{year}Q{quarter}")
+            current = current.replace(month=1, day=1) - timedelta(days=1)
+
+        # 去重并排序
+        quarters = sorted(set(quarters), reverse=True)
+
+        synced = 0
+        skipped = 0
+        total_quarters = len(quarters)
+
+        for i, quarter in enumerate(quarters):
+            # 更新进度
+            if job_id:
+                progress = int(base_step + (i / total_quarters) * total_steps)
+                await self._update_progress(
+                    job_id, progress, total_steps * 3,
+                    f"正在同步分析师预测: {quarter} ({i+1}/{total_quarters})"
+                )
+
+            # 获取该季度的所有报告
+            # 注意：Tushare report_rc 接口需要用 period 参数获取季度数据
+            df = await asyncio.to_thread(
+                self.pro.report_rc,
+                period=quarter,
+                offset=0,
+                limit=5000
+            )
+
+            if not df.empty:
+                for _, row in df.iterrows():
+                    record = row.to_dict()
+
+                    result = await db.mdvaes_analyst_forecasts.update_one(
+                        {
+                            "ts_code": record["ts_code"],
+                            "quarter": record["quarter"],
+                            "report_date": record["report_date"]
+                        },
+                        {
+                            "$set": {
+                                **record,
+                                "synced_at": datetime.now()
+                            }
+                        },
+                        upsert=True
+                    )
+
+                    if result.upserted_id:
+                        synced += 1
+                    else:
+                        skipped += 1
+
+        return {"synced": synced, "skipped": skipped}
+
+    async def _update_progress(self, job_id: str, progress: int, total_items: int, message: str):
+        """更新任务进度
+
+        Args:
+            job_id: 任务ID
+            progress: 当前进度（已完成项数）
+            total_items: 总项数
+            message: 进度消息
+        """
+        try:
+            from app.core.database import get_mongo_db
+            from datetime import datetime as dt
+
+            db = await get_mongo_db()
+            progress_percent = int((progress / total_items) * 100) if total_items > 0 else 100
+
+            await db.scheduler_executions.update_one(
+                {"job_id": job_id, "status": "running"},
+                {
+                    "$set": {
+                        "progress": progress_percent,
+                        "progress_message": message,
+                        "updated_at": dt.now()
+                    }
+                }
+            )
+        except Exception as e:
+            logger.warning(f"更新进度失败: {e}")
+
 
 # 全局服务实例
 _mdvaes_sync_service: Optional[MDVAESDataSyncService] = None
