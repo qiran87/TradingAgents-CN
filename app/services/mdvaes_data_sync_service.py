@@ -297,7 +297,13 @@ class MDVAESDataSyncService:
         if not df.empty:
             for _, row in df.iterrows():
                 record = row.to_dict()
-                trade_date = datetime.strptime(record.get("date", ""), "%Y%m%d").strftime("%Y%m%d")
+                # 处理日期字段：优先使用 date 字段，其次使用其他可能的字段名
+                date_str = record.get("date") or record.get("trade_date") or record.get("cal_date")
+                if not date_str:
+                    logger.warning(f"跳过缺少日期字段的记录: {record}")
+                    continue
+
+                trade_date = datetime.strptime(str(date_str), "%Y%m%d").strftime("%Y%m%d")
 
                 result = await db.mdvaes_bond_rate.update_one(
                     {
