@@ -21,7 +21,7 @@ class MDVAESDataSyncService:
         """同步指定交易日的所有 MDVAES 数据"""
         logger.info(f"开始同步 MDVAES 数据: {trade_date}")
 
-        db = await get_mongo_db()
+        db = get_mongo_db()
 
         try:
             # 1. 同步分析师盈利预测（使用最近报告日期）
@@ -168,7 +168,7 @@ class MDVAESDataSyncService:
 
     async def get_sync_status(self):
         """获取 MDVAES 数据同步状态"""
-        db = await get_mongo_db()
+        db = get_mongo_db()
 
         # 统计各集合的数据量
         analyst_count = await db.mdvaes_analyst_forecasts.estimated_document_count()
@@ -222,7 +222,7 @@ class MDVAESDataSyncService:
         """
         logger.info(f"🚀 [批量同步] 开始同步历史数据: {start_date} 至 {end_date}")
 
-        db = await get_mongo_db()
+        db = get_mongo_db()
         results = {
             "start_date": start_date,
             "end_date": end_date,
@@ -455,7 +455,7 @@ class MDVAESDataSyncService:
             from app.core.database import get_mongo_db
             from datetime import datetime as dt
 
-            db = await get_mongo_db()
+            db = get_mongo_db()
             progress_percent = int((progress / total_items) * 100) if total_items > 0 else 100
 
             await db.scheduler_executions.update_one(
