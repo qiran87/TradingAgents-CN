@@ -195,17 +195,14 @@ async def batch_sync_historical_data(
 @router.get("/batch-sync/{task_id}/status", summary="查询批量同步状态", response_model=BatchSyncStatusResponse)
 async def get_batch_sync_status(
     task_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_mongo_db)
 ):
     """
     查询批量同步任务状态
 
     返回任务进度、当前消息和结果统计。
     """
-    from app.core.database import get_mongo_db
-    from datetime import datetime
-
-    db = await get_mongo_db()
 
     # 查询任务执行记录
     execution = await db.scheduler_executions.find_one(
@@ -239,7 +236,7 @@ async def _run_batch_sync_task(task_id: str, start_date: str, end_date: str):
         # 更新初始进度（直接插入执行记录）
         from app.core.database import get_mongo_db
         from datetime import datetime as dt
-        db = await get_mongo_db()
+        db = get_mongo_db()
 
         execution_record = {
             "job_id": task_id,
@@ -284,7 +281,7 @@ async def _run_batch_sync_task(task_id: str, start_date: str, end_date: str):
         try:
             from app.core.database import get_mongo_db
             from datetime import datetime as dt
-            db = await get_mongo_db()
+            db = get_mongo_db()
             await db.scheduler_executions.update_one(
                 {"job_id": task_id, "status": "running"},
                 {
