@@ -531,7 +531,7 @@
     <el-dialog
       v-model="executionDetailDialogVisible"
       title="执行详情"
-      width="800px"
+      width="900px"
       :close-on-click-modal="false"
     >
       <el-descriptions v-if="currentExecution" :column="1" border>
@@ -573,6 +573,16 @@
           <pre style="max-height: 300px; overflow-y: auto; background: #f5f5f5; padding: 12px; border-radius: 4px;">{{ currentExecution.traceback }}</pre>
         </el-descriptions-item>
       </el-descriptions>
+
+      <!-- MDVAES 批量同步详细结果 -->
+      <div v-if="currentExecution && currentExecution.return_value && currentExecution.return_value.detailed_description" style="margin-top: 24px;">
+        <el-divider content-position="left">
+          <strong>📊 同步结果详情</strong>
+        </el-divider>
+        <div class="mdvaes-sync-detail" style="max-height: 400px; overflow-y: auto; background: #f8f9fa; padding: 16px; border-radius: 8px; margin-top: 12px;">
+          <pre style="white-space: pre-wrap; word-wrap: break-word; font-family: inherit; font-size: 14px; line-height: 1.8; margin: 0;">{{ currentExecution.return_value.detailed_description }}</pre>
+        </div>
+      </div>
 
       <template #footer>
         <el-button @click="executionDetailDialogVisible = false">关闭</el-button>
@@ -739,6 +749,25 @@
           />
         </el-form-item>
 
+        <!-- 表选择 -->
+        <el-form-item label="选择要同步的表">
+          <el-checkbox-group v-model="batchSyncForm.selectedTables">
+            <el-checkbox-button
+              v-for="table in mdvaesTableOptions"
+              :key="table.value"
+              :label="table.value"
+              style="margin-right: 8px; margin-bottom: 8px"
+            >
+              {{ table.label }}
+            </el-checkbox-button>
+          </el-checkbox-group>
+          <div style="margin-top: 8px;">
+            <el-button size="small" @click="selectAllTables">全选</el-button>
+            <el-button size="small" @click="clearAllTables">清空</el-button>
+            <el-button size="small" type="primary" @click="selectCommonTables">常用选择</el-button>
+          </div>
+        </el-form-item>
+
         <!-- 预估信息 -->
         <el-form-item label="预估信息">
           <div v-if="batchSyncForm.dateRange && batchSyncForm.dateRange.length === 2" class="estimate-info">
@@ -750,6 +779,10 @@
             <el-text size="small" type="info">
               预计耗时：约 <strong>{{ estimatedTime }}</strong> （实际视网络情况而定）
             </el-text>
+            <br />
+            <el-text size="small" type="info">
+              已选择：<strong>{{ batchSyncForm.selectedTables.length }}</strong> 张表
+            </el-text>
           </div>
           <el-text v-else type="info">请选择日期范围</el-text>
         </el-form-item>
@@ -760,6 +793,7 @@
             <p>• 单次同步时间范围不超过 3 年</p>
             <p>• 可重复执行不同时间段，已存在数据会自动跳过</p>
             <p>• 确保网络连接稳定，Tushare API 有调用限制</p>
+            <p>• 至少选择一张表进行同步</p>
           </div>
         </el-form-item>
       </el-form>
@@ -770,7 +804,7 @@
           type="primary"
           @click="startBatchSync"
           :loading="batchSyncSubmitting"
-          :disabled="!batchSyncForm.dateRange || batchSyncForm.dateRange.length !== 2"
+          :disabled="!batchSyncForm.dateRange || batchSyncForm.dateRange.length !== 2 || batchSyncForm.selectedTables.length === 0"
         >
           开始同步
         </el-button>
@@ -869,8 +903,33 @@ const currentExecution = ref<JobExecution | null>(null)
 const batchSyncDialogVisible = ref(false)
 const batchSyncSubmitting = ref(false)
 const batchSyncForm = reactive({
-  dateRange: [null, null] as [string | null, string | null]
+  dateRange: [null, null] as [string | null, string | null],
+  selectedTables: ['analyst_forecasts', 'pe_history', 'bond_rate', 'financial_ratios', 'eps_history'] as string[]
 })
+
+// MDVAES 表选项
+const mdvaesTableOptions = [
+  { label: '分析师盈利预测', value: 'analyst_forecasts' },
+  { label: 'PE历史数据', value: 'pe_history' },
+  { label: '国债收益率', value: 'bond_rate' },
+  { label: '财务比率数据', value: 'financial_ratios' },
+  { label: 'EPS历史数据', value: 'eps_history' }
+]
+
+// 全选表
+const selectAllTables = () => {
+  batchSyncForm.selectedTables = mdvaesTableOptions.map(t => t.value)
+}
+
+// 清空选择
+const clearAllTables = () => {
+  batchSyncForm.selectedTables = []
+}
+
+// 常用选择（排除 EPS 历史数据，因为它通常数据量最大）
+const selectCommonTables = () => {
+  batchSyncForm.selectedTables = ['analyst_forecasts', 'pe_history', 'bond_rate', 'financial_ratios']
+}
 
 // 快捷日期范围选项
 const quickDateRanges = [
@@ -1185,6 +1244,8 @@ watch(historyDialogVisible, (newVal) => {
 const showBatchSyncDialog = () => {
   // 重置表单
   batchSyncForm.dateRange = [null, null]
+  // 重置表选择为默认全选
+  batchSyncForm.selectedTables = ['analyst_forecasts', 'pe_history', 'bond_rate', 'financial_ratios', 'eps_history']
   batchSyncDialogVisible.value = true
 }
 
@@ -1203,6 +1264,12 @@ const startBatchSync = async () => {
   // 验证日期范围
   if (!batchSyncForm.dateRange || batchSyncForm.dateRange.length !== 2) {
     ElMessage.warning('请选择日期范围')
+    return
+  }
+
+  // 验证至少选择一张表
+  if (batchSyncForm.selectedTables.length === 0) {
+    ElMessage.warning('请至少选择一张表进行同步')
     return
   }
 
@@ -1233,7 +1300,8 @@ const startBatchSync = async () => {
       },
       body: JSON.stringify({
         start_date: start,
-        end_date: end
+        end_date: end,
+        tables: batchSyncForm.selectedTables
       })
     })
 

@@ -24,6 +24,16 @@ class BatchSyncRequest(BaseModel):
     """批量同步请求"""
     start_date: str = Field(..., description="开始日期 YYYY-MM-DD", example="2015-01-01")
     end_date: str = Field(..., description="结束日期 YYYY-MM-DD", example="2016-12-31")
+    tables: list[str] = Field(
+        default=["analyst_forecasts", "pe_history", "bond_rate", "financial_ratios", "eps_history"],
+        description="要同步的表列表",
+        json_schema_extra={
+            "items": {
+                "type": "string",
+                "enum": ["analyst_forecasts", "pe_history", "bond_rate", "financial_ratios", "eps_history"]
+            }
+        }
+    )
 
 
 class BatchSyncResponse(BaseModel):
@@ -184,7 +194,8 @@ async def batch_sync_historical_data(
         _run_batch_sync_task,
         task_id,
         request.start_date,
-        request.end_date
+        request.end_date,
+        request.tables
     )
 
     return BatchSyncResponse(
@@ -228,7 +239,7 @@ async def get_batch_sync_status(
 
 # ===== 后台任务函数 =====
 
-async def _run_batch_sync_task(task_id: str, start_date: str, end_date: str):
+async def _run_batch_sync_task(task_id: str, start_date: str, end_date: str, tables: list[str]):
     """后台执行批量同步任务"""
     import sys
     import os
@@ -256,7 +267,8 @@ async def _run_batch_sync_task(task_id: str, start_date: str, end_date: str):
         result = await service.batch_sync_historical_data(
             start_date=start_date,
             end_date=end_date,
-            job_id=task_id
+            job_id=task_id,
+            tables=tables
         )
 
         # 更新为完成状态

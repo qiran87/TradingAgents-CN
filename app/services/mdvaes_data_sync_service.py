@@ -2,12 +2,23 @@
 
 import logging
 import asyncio
+import random
 from typing import Optional
 from datetime import datetime, timedelta
 import pandas as pd
 import tushare as ts
 from app.core.config import settings
 from app.core.database import get_mongo_db
+
+# Tushare API 重试机制
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_random_exponential,
+    retry_if_exception_type
+)
+import requests
+from requests.exceptions import Timeout, ConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +28,50 @@ class MDVAESDataSyncService:
 
     def __init__(self):
         self.pro = ts.pro_api(settings.TUSHARE_TOKEN)
+
+    def _log_retry_attempt(self, retry_state):
+        """记录重试尝试"""
+        logger.warning(
+            f"🔄 Tushare API 调用失败，正在重试... "
+            f"(第 {retry_state.attempt_number} 次，最多 3 次)"
+        )
+
+    async def _call_tushare_with_retry(self, func, *args, **kwargs):
+        """
+        带重试机制的 Tushare API 调用包装器
+
+        Args:
+            func: Tushare pro API 方法
+            *args, **kwargs: 传递给 API 方法的参数
+
+        Returns:
+            API 返回结果
+
+        Raises:
+            最后一次失败后的异常
+        """
+        # 定义同步的包装函数（因为 tenacity 需要同步函数）
+        def sync_wrapper():
+            return func(*args, **kwargs)
+
+        # 使用 tenacity 重试
+        # 注意：before_sleep 在每次重试前调用
+        retryer = retry(
+            stop=stop_after_attempt(3),
+            wait=wait_random_exponential(multiplier=1, max=10),
+            retry=retry_if_exception_type((Timeout, ConnectionError, OSError, requests.exceptions.RequestException)),
+            before_sleep=self._log_retry_attempt,
+            reraise=True
+        )
+
+        # 在新线程中执行（因为 Tushare API 是同步的）
+        try:
+            result = await asyncio.to_thread(retryer(sync_wrapper))
+            logger.debug(f"✅ Tushare API 调用成功")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Tushare API 调用彻底失败（已重试3次）: {e}")
+            raise
 
     async def sync_daily_data(self, trade_date: str):
         """同步指定交易日的所有 MDVAES 数据"""
@@ -61,8 +116,8 @@ class MDVAESDataSyncService:
         limit = 3000
 
         while True:
-            # 使用 asyncio.to_thread 在单独线程中执行阻塞的 Tushare API 调用
-            df = await asyncio.to_thread(
+            # 使用带重试机制的 Tushare API 调用
+            df = await self._call_tushare_with_retry(
                 self.pro.report_rc,
                 report_date=report_date,
                 offset=offset,
@@ -113,8 +168,8 @@ class MDVAESDataSyncService:
         # 获取前 10 个交易日（确保数据完整性）
         start_date = (datetime.strptime(trade_date, "%Y%m%d") - timedelta(days=20)).strftime("%Y%m%d")
 
-        # 使用 asyncio.to_thread 在单独线程中执行阻塞的 Tushare API 调用
-        df = await asyncio.to_thread(
+        # 使用带重试机制的 Tushare API 调用
+        df = await self._call_tushare_with_retry(
             self.pro.daily_basic,
             ts_code="",
             start_date=start_date,
@@ -149,8 +204,8 @@ class MDVAESDataSyncService:
         Tushare 接口: yc_cb (doc_id=201)
         获取 10 年期国债收益率
         """
-        # 使用 asyncio.to_thread 在单独线程中执行阻塞的 Tushare API 调用
-        df = await asyncio.to_thread(
+        # 使用带重试机制的 Tushare API 调用
+        df = await self._call_tushare_with_retry(
             self.pro.yc_cb,
             ts_code="1001.CB",  # 国债代码
             curve_type="0",      # 到期收益率
@@ -220,7 +275,8 @@ class MDVAESDataSyncService:
         self,
         start_date: str,
         end_date: str,
-        job_id: str = None
+        job_id: str = None,
+        tables: list[str] = None
     ):
         """批量同步历史数据
 
@@ -228,89 +284,207 @@ class MDVAESDataSyncService:
             start_date: 开始日期 YYYY-MM-DD
             end_date: 结束日期 YYYY-MM-DD
             job_id: 任务ID（用于进度报告）
+            tables: 要同步的表列表，如 ["analyst_forecasts", "pe_history", "bond_rate", "financial_ratios", "eps_history"]
 
         Returns:
-            同步结果统计
+            同步结果统计（包含详细描述）
         """
+        # 默认同步所有表
+        if tables is None:
+            tables = ["analyst_forecasts", "pe_history", "bond_rate", "financial_ratios", "eps_history"]
+
+        # 表名称映射（中文显示）
+        table_names = {
+            "analyst_forecasts": "分析师盈利预测",
+            "pe_history": "PE历史数据",
+            "bond_rate": "国债收益率",
+            "financial_ratios": "财务比率数据",
+            "eps_history": "EPS历史数据"
+        }
+
         logger.info(f"🚀 [批量同步] 开始同步历史数据: {start_date} 至 {end_date}")
+        logger.info(f"📋 [批量同步] 选定同步表: {', '.join([table_names.get(t, t) for t in tables])}")
 
         db = get_mongo_db()
+
+        # 记录每个表的同步状态
+        table_status = {}
+        detailed_description = []
+        detailed_description.append(f"## MDVAES 批量同步任务详情")
+        detailed_description.append(f"**时间范围**: {start_date} 至 {end_date}")
+        detailed_description.append(f"**选定同步表**: {', '.join([table_names.get(t, t) for t in tables])}")
+        detailed_description.append("")
+        detailed_description.append("### 同步结果详情")
+        detailed_description.append("")
 
         try:
             # 转换日期格式
             start_dt = datetime.strptime(start_date, "%Y-%m-%d")
             end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
-            # 总天数估算
-            total_days = (end_dt - start_dt).days + 1
-            current_step = 0
+            # 根据选定的表执行同步
+            total_tables = len(tables)
+            current_table_index = 0
 
-            # 1. 批量同步国债收益率（一次性获取整个时间段）
-            logger.info("📊 [批量同步] 开始同步国债收益率...")
-            current_step = 1
-            if job_id:
-                await self._update_progress(job_id, current_step, total_days * 3, "正在同步国债收益率")
-            bond_result = await self._batch_sync_bond_yield(db, start_dt, end_dt)
-            logger.info(f"  ✅ 国债收益率同步完成: 新增 {bond_result['synced']} 条, 更新 {bond_result.get('updated', 0)} 条")
+            # 1. 批量同步国债收益率
+            if "bond_rate" in tables:
+                current_table_index += 1
+                logger.info("📊 [批量同步] 开始同步国债收益率...")
+                try:
+                    if job_id:
+                        await self._update_progress(job_id, current_table_index * 10, total_tables * 10, f"正在同步国债收益率... ({current_table_index}/{total_tables})")
+                    bond_result = await self._batch_sync_bond_yield(db, start_dt, end_dt)
+                    table_status["bond_rate"] = {"status": "success", "result": bond_result}
+                    detailed_description.append(f"#### ✅ 国债收益率 (mdvaes_bond_rate) - 完成")
+                    detailed_description.append(f"- 新增: {bond_result['synced']} 条")
+                    detailed_description.append(f"- 更新: {bond_result.get('updated', 0)} 条")
+                    detailed_description.append(f"- 跳过: {bond_result['skipped']} 条")
+                    logger.info(f"  ✅ 国债收益率同步完成: 新增 {bond_result['synced']} 条, 更新 {bond_result.get('updated', 0)} 条")
+                except Exception as e:
+                    table_status["bond_rate"] = {"status": "error", "error": str(e)}
+                    detailed_description.append(f"#### ❌ 国债收益率 (mdvaes_bond_rate) - 失败")
+                    detailed_description.append(f"- 错误原因: {str(e)}")
+                    logger.error(f"  ❌ 国债收益率同步失败: {e}")
+                detailed_description.append("")
+            else:
+                detailed_description.append(f"#### ⏭️ 国债收益率 (mdvaes_bond_rate) - 跳过")
+                detailed_description.append("")
 
-            # 2. 批量同步每日估值指标（一次性获取整个时间段）
-            logger.info("📊 [批量同步] 开始同步每日估值指标...")
-            current_step = total_days
-            if job_id:
-                await self._update_progress(job_id, current_step, total_days * 3, "正在同步每日估值指标")
-            pe_result = await self._batch_sync_daily_basic(db, start_dt, end_dt)
-            logger.info(f"  ✅ 每日估值指标同步完成: 新增 {pe_result['synced']} 条, 更新 {pe_result.get('updated', 0)} 条")
+            # 2. 批量同步每日估值指标
+            if "pe_history" in tables:
+                current_table_index += 1
+                logger.info("📊 [批量同步] 开始同步每日估值指标...")
+                try:
+                    if job_id:
+                        await self._update_progress(job_id, current_table_index * 10, total_tables * 10, f"正在同步每日估值指标... ({current_table_index}/{total_tables})")
+                    pe_result = await self._batch_sync_daily_basic(db, start_dt, end_dt)
+                    table_status["pe_history"] = {"status": "success", "result": pe_result}
+                    detailed_description.append(f"#### ✅ PE历史数据 (mdvaes_pe_history) - 完成")
+                    detailed_description.append(f"- 新增: {pe_result['synced']} 条")
+                    detailed_description.append(f"- 更新: {pe_result.get('updated', 0)} 条")
+                    detailed_description.append(f"- 跳过: {pe_result['skipped']} 条")
+                    logger.info(f"  ✅ 每日估值指标同步完成: 新增 {pe_result['synced']} 条, 更新 {pe_result.get('updated', 0)} 条")
+                except Exception as e:
+                    table_status["pe_history"] = {"status": "error", "error": str(e)}
+                    detailed_description.append(f"#### ❌ PE历史数据 (mdvaes_pe_history) - 失败")
+                    detailed_description.append(f"- 错误原因: {str(e)}")
+                    logger.error(f"  ❌ 每日估值指标同步失败: {e}")
+                detailed_description.append("")
+            else:
+                detailed_description.append(f"#### ⏭️ PE历史数据 (mdvaes_pe_history) - 跳过")
+                detailed_description.append("")
 
-            # 3. 批量同步分析师盈利预测（按报告日期逐个获取）
-            logger.info("📊 [批量同步] 开始同步分析师盈利预测...")
-            # 分析师预测按报告日期获取，从结束日期倒推获取最近的报告日期
-            analyst_result = await self._batch_sync_analyst_forecasts(
-                db, start_dt, end_dt, job_id, total_days, current_step
-            )
-            logger.info(f"  ✅ 分析师预测同步完成: 新增 {analyst_result['synced']} 条, 更新 {analyst_result.get('updated', 0)} 条")
+            # 3. 批量同步分析师盈利预测
+            if "analyst_forecasts" in tables:
+                current_table_index += 1
+                logger.info("📊 [批量同步] 开始同步分析师盈利预测...")
+                try:
+                    if job_id:
+                        await self._update_progress(job_id, current_table_index * 10, total_tables * 10, f"正在同步分析师盈利预测... ({current_table_index}/{total_tables})")
+                    analyst_result = await self._batch_sync_analyst_forecasts(
+                        db, start_dt, end_dt, job_id, 10, current_table_index
+                    )
+                    table_status["analyst_forecasts"] = {"status": "success", "result": analyst_result}
+                    detailed_description.append(f"#### ✅ 分析师盈利预测 (mdvaes_analyst_forecasts) - 完成")
+                    detailed_description.append(f"- 新增: {analyst_result['synced']} 条")
+                    detailed_description.append(f"- 更新: {analyst_result.get('updated', 0)} 条")
+                    detailed_description.append(f"- 跳过: {analyst_result['skipped']} 条")
+                    logger.info(f"  ✅ 分析师预测同步完成: 新增 {analyst_result['synced']} 条, 更新 {analyst_result.get('updated', 0)} 条")
+                except Exception as e:
+                    table_status["analyst_forecasts"] = {"status": "error", "error": str(e)}
+                    detailed_description.append(f"#### ❌ 分析师盈利预测 (mdvaes_analyst_forecasts) - 失败")
+                    detailed_description.append(f"- 错误原因: {str(e)}")
+                    logger.error(f"  ❌ 分析师预测同步失败: {e}")
+                detailed_description.append("")
+            else:
+                detailed_description.append(f"#### ⏭️ 分析师盈利预测 (mdvaes_analyst_forecasts) - 跳过")
+                detailed_description.append("")
 
             # 4. 批量同步财务比率数据
-            logger.info("📊 [批量同步] 开始同步财务比率数据...")
-            ratios_result = await self._batch_sync_financial_ratios(db, start_dt, end_dt)
-            logger.info(f"  ✅ 财务比率同步完成: 新增 {ratios_result['synced']} 条, 更新 {ratios_result.get('updated', 0)} 条")
+            if "financial_ratios" in tables:
+                current_table_index += 1
+                logger.info("📊 [批量同步] 开始同步财务比率数据...")
+                try:
+                    if job_id:
+                        await self._update_progress(job_id, current_table_index * 10, total_tables * 10, f"正在同步财务比率数据... ({current_table_index}/{total_tables})")
+                    ratios_result = await self._batch_sync_financial_ratios(db, start_dt, end_dt)
+                    table_status["financial_ratios"] = {"status": "success", "result": ratios_result}
+                    detailed_description.append(f"#### ✅ 财务比率数据 (mdvaes_financial_ratios) - 完成")
+                    detailed_description.append(f"- 新增: {ratios_result['synced']} 条")
+                    detailed_description.append(f"- 更新: {ratios_result.get('updated', 0)} 条")
+                    detailed_description.append(f"- 跳过: {ratios_result['skipped']} 条")
+                    logger.info(f"  ✅ 财务比率同步完成: 新增 {ratios_result['synced']} 条, 更新 {ratios_result.get('updated', 0)} 条")
+                except Exception as e:
+                    table_status["financial_ratios"] = {"status": "error", "error": str(e)}
+                    detailed_description.append(f"#### ❌ 财务比率数据 (mdvaes_financial_ratios) - 失败")
+                    detailed_description.append(f"- 错误原因: {str(e)}")
+                    logger.error(f"  ❌ 财务比率同步失败: {e}")
+                detailed_description.append("")
+            else:
+                detailed_description.append(f"#### ⏭️ 财务比率数据 (mdvaes_financial_ratios) - 跳过")
+                detailed_description.append("")
 
             # 5. 批量同步 EPS 历史数据
-            logger.info("📊 [批量同步] 开始同步 EPS 历史数据...")
-            eps_result = await self._batch_sync_eps_history(db, start_dt, end_dt)
-            logger.info(f"  ✅ EPS 历史同步完成: 新增 {eps_result['synced']} 条, 更新 {eps_result.get('updated', 0)} 条")
+            if "eps_history" in tables:
+                current_table_index += 1
+                logger.info("📊 [批量同步] 开始同步 EPS 历史数据...")
+                try:
+                    if job_id:
+                        await self._update_progress(job_id, current_table_index * 10, total_tables * 10, f"正在同步 EPS 历史数据... ({current_table_index}/{total_tables})")
+                    eps_result = await self._batch_sync_eps_history(db, start_dt, end_dt)
+                    table_status["eps_history"] = {"status": "success", "result": eps_result}
+                    detailed_description.append(f"#### ✅ EPS历史数据 (mdvaes_eps_history) - 完成")
+                    detailed_description.append(f"- 新增: {eps_result['synced']} 条")
+                    detailed_description.append(f"- 更新: {eps_result.get('updated', 0)} 条")
+                    detailed_description.append(f"- 跳过: {eps_result['skipped']} 条")
+                    logger.info(f"  ✅ EPS 历史同步完成: 新增 {eps_result['synced']} 条, 更新 {eps_result.get('updated', 0)} 条")
+                except Exception as e:
+                    table_status["eps_history"] = {"status": "error", "error": str(e)}
+                    detailed_description.append(f"#### ❌ EPS历史数据 (mdvaes_eps_history) - 失败")
+                    detailed_description.append(f"- 错误原因: {str(e)}")
+                    logger.error(f"  ❌ EPS 历史同步失败: {e}")
+                detailed_description.append("")
+            else:
+                detailed_description.append(f"#### ⏭️ EPS历史数据 (mdvaes_eps_history) - 跳过")
+                detailed_description.append("")
 
-            # 构建返回结果（保持向后兼容，将 updated 计入 skipped）
+            # 汇总统计
+            success_count = sum(1 for s in table_status.values() if s["status"] == "success")
+            error_count = sum(1 for s in table_status.values() if s["status"] == "error")
+
+            detailed_description.append("")
+            detailed_description.append("### 汇总统计")
+            detailed_description.append(f"- 总计: {total_tables} 张表")
+            detailed_description.append(f"- 成功: {success_count} 张")
+            detailed_description.append(f"- 失败: {error_count} 张")
+
+            # 构建返回结果（保持向后兼容）
             results = {
                 "start_date": start_date,
                 "end_date": end_date,
-                "analyst_forecasts": {
-                    "synced": analyst_result["synced"],
-                    "updated": analyst_result.get("updated", 0),
-                    "skipped": analyst_result["skipped"]
+                "selected_tables": tables,
+                "summary": {
+                    "total": total_tables,
+                    "success": success_count,
+                    "error": error_count
                 },
-                "pe_history": {
-                    "synced": pe_result["synced"],
-                    "updated": pe_result.get("updated", 0),
-                    "skipped": pe_result["skipped"]
-                },
-                "bond_rate": {
-                    "synced": bond_result["synced"],
-                    "updated": bond_result.get("updated", 0),
-                    "skipped": bond_result["skipped"]
-                },
-                "financial_ratios": {
-                    "synced": ratios_result["synced"],
-                    "updated": ratios_result.get("updated", 0),
-                    "skipped": ratios_result["skipped"]
-                },
-                "eps_history": {
-                    "synced": eps_result["synced"],
-                    "updated": eps_result.get("updated", 0),
-                    "skipped": eps_result["skipped"]
-                }
+                "table_status": table_status,
+                "detailed_description": "\n".join(detailed_description)
             }
 
-            logger.info(f"✅ [批量同步] 历史数据同步完成")
+            # 为兼容性，保留原有的数据结构（如果表已同步）
+            if "analyst_forecasts" in table_status and table_status["analyst_forecasts"]["status"] == "success":
+                results["analyst_forecasts"] = table_status["analyst_forecasts"]["result"]
+            if "pe_history" in table_status and table_status["pe_history"]["status"] == "success":
+                results["pe_history"] = table_status["pe_history"]["result"]
+            if "bond_rate" in table_status and table_status["bond_rate"]["status"] == "success":
+                results["bond_rate"] = table_status["bond_rate"]["result"]
+            if "financial_ratios" in table_status and table_status["financial_ratios"]["status"] == "success":
+                results["financial_ratios"] = table_status["financial_ratios"]["result"]
+            if "eps_history" in table_status and table_status["eps_history"]["status"] == "success":
+                results["eps_history"] = table_status["eps_history"]["result"]
+
+            logger.info(f"✅ [批量同步] 历史数据同步完成 (成功: {success_count}, 失败: {error_count})")
             return results
 
         except Exception as e:
@@ -325,7 +499,7 @@ class MDVAESDataSyncService:
         start_date_str = start_dt.strftime("%Y%m%d")
         end_date_str = end_dt.strftime("%Y%m%d")
 
-        df = await asyncio.to_thread(
+        df = await self._call_tushare_with_retry(
             self.pro.yc_cb,
             ts_code="1001.CB",
             curve_type="0",
@@ -408,7 +582,7 @@ class MDVAESDataSyncService:
         for idx, trade_date in enumerate(date_list, 1):
             logger.info(f"  📡 [{idx}/{len(date_list)}] 获取 {trade_date} 的数据...")
 
-            df = await asyncio.to_thread(
+            df = await self._call_tushare_with_retry(
                 self.pro.daily_basic,
                 ts_code="",
                 trade_date=trade_date,
@@ -505,8 +679,8 @@ class MDVAESDataSyncService:
         while True:
             logger.info(f"  📡 [第{page}页] 获取数据 (offset={offset})...")
 
-            # 使用 ann_date 参数获取指定日期范围的数据
-            df = await asyncio.to_thread(
+            # 使用带重试机制的 Tushare API 调用
+            df = await self._call_tushare_with_retry(
                 self.pro.report_rc,
                 start_date=start_date_str,
                 end_date=end_date_str,
@@ -656,7 +830,7 @@ class MDVAESDataSyncService:
 
         # 1. 获取股票列表
         logger.info("  📋 获取股票列表...")
-        stock_df = await asyncio.to_thread(
+        stock_df = await self._call_tushare_with_retry(
             self.pro.stock_basic,
             list_status='L',
             fields='ts_code,symbol,name'
@@ -691,7 +865,7 @@ class MDVAESDataSyncService:
                 ts_codes_str = ",".join(batch_codes)
 
                 try:
-                    df = await asyncio.to_thread(
+                    df = await self._call_tushare_with_retry(
                         self.pro.fina_indicator,
                         ts_code=ts_codes_str,
                         start_date=year_start,
@@ -749,7 +923,7 @@ class MDVAESDataSyncService:
 
         # 1. 获取股票列表
         logger.info("  📋 获取股票列表...")
-        stock_df = await asyncio.to_thread(
+        stock_df = await self._call_tushare_with_retry(
             self.pro.stock_basic,
             list_status='L',
             fields='ts_code,symbol,name'
@@ -784,7 +958,7 @@ class MDVAESDataSyncService:
                 ts_codes_str = ",".join(batch_codes)
 
                 try:
-                    df = await asyncio.to_thread(
+                    df = await self._call_tushare_with_retry(
                         self.pro.fina_indicator,
                         ts_code=ts_codes_str,
                         start_date=year_start,
