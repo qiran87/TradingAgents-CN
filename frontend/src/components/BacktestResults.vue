@@ -221,6 +221,74 @@
           <div v-else ref="chartRef" class="chart-container"></div>
         </el-card>
 
+        <!-- MDVAES 估值图表 (仅 MDVAES 策略显示) -->
+        <template v-if="isMDVAESStrategy">
+          <el-divider content-position="left">
+            <span style="font-size: 16px; font-weight: 600;">MDVAES 估值分析</span>
+          </el-divider>
+
+          <!-- 调试信息 -->
+          <el-alert type="info" :closable="false" style="margin-bottom: 10px">
+            <div><strong>调试信息:</strong></div>
+            <div>isMDVAESStrategy: {{ isMDVAESStrategy }}</div>
+            <div>valuationHistory.length: {{ valuationHistory.length }}</div>
+            <div>backtestId: {{ props.backtestId }}</div>
+            <div v-if="valuationHistory.length > 0">
+              <div>第一条数据: {{ JSON.stringify(valuationHistory[0]) }}</div>
+            </div>
+            <div v-else style="color: red;">
+              <strong>⚠️ valuationHistory 为空！</strong>
+            </div>
+          </el-alert>
+
+          <!-- 估值推演图和水位仪表盘 -->
+          <el-row :gutter="20">
+            <el-col :span="16">
+              <el-card shadow="hover" class="chart-card">
+                <template #header>
+                  <div class="card-header">
+                    <el-icon><TrendCharts /></el-icon>
+                    <span>估值推演图</span>
+                  </div>
+                </template>
+                <ValuationProjectionChart :data="valuationHistory" />
+              </el-card>
+            </el-col>
+            <el-col :span="8">
+              <el-card shadow="hover" class="chart-card">
+                <template #header>
+                  <div class="card-header">
+                    <el-icon><DataAnalysis /></el-icon>
+                    <span>估值水位</span>
+                  </div>
+                </template>
+                <WaterLevelGauge
+                  v-if="valuationHistory.length > 0"
+                  :current-price="valuationHistory[valuationHistory.length - 1].current_price"
+                  :intrinsic-value="valuationHistory[valuationHistory.length - 1].intrinsic_value"
+                  :lower-bound="valuationHistory[valuationHistory.length - 1].lower_bound"
+                  :upper-bound="valuationHistory[valuationHistory.length - 1].upper_bound"
+                />
+              </el-card>
+            </el-col>
+          </el-row>
+
+          <!-- EPS 趋势图 -->
+          <el-row :gutter="20">
+            <el-col :span="24">
+              <el-card shadow="hover" class="chart-card">
+                <template #header>
+                  <div class="card-header">
+                    <el-icon><TrendCharts /></el-icon>
+                    <span>EPS 趋势分析</span>
+                  </div>
+                </template>
+                <EPSTrendChart :data="epsTrendData" />
+              </el-card>
+            </el-col>
+          </el-row>
+        </template>
+
         <!-- 交易明细 -->
         <el-card shadow="hover" class="trades-card">
           <template #header>
@@ -325,8 +393,11 @@ import {
   Picture,
   ArrowDown
 } from '@element-plus/icons-vue'
-import { backtestEngineApi, type BacktestResults, type TradeRecord } from '@/api/backtestEngine'
+import { backtestEngineApi, type BacktestResults, type TradeRecord, type ValuationHistoryDataPoint } from '@/api/backtestEngine'
 import { backtestExportApi, chartExportUtils } from '@/api/backtestExport'
+import ValuationProjectionChart from '@/components/MDVAES/ValuationProjectionChart.vue'
+import WaterLevelGauge from '@/components/MDVAES/WaterLevelGauge.vue'
+import EPSTrendChart from '@/components/MDVAES/EPSTrendChart.vue'
 
 interface Props {
   backtestId: string
@@ -344,6 +415,74 @@ const chartRef = ref<HTMLElement>()
 const chartError = ref(false)
 const excelExportLoading = ref(false)
 
+// MDVAES 估值相关状态
+const valuationHistory = ref<any[]>([])
+const valuationLoading = ref(false)
+const isMDVAESStrategy = ref(false)
+
+// 从估值历史获取 EPS 趋势数据
+// 注意：这是回测估值时使用的"预测 EPS"，不是历史财报 EPS
+// 数据来源：
+//   1. mdvaes_eps_history 表存储历史财报 EPS
+//   2. 通过 CAGR 外推或分析师预测得到未来 EPS
+//   3. 回测时使用 eps_forecasts[0]（第1年预测）作为估值假设
+// 展示这个 EPS 可以让用户了解估值计算时使用的盈利假设
+const epsTrendData = computed(() => {
+  if (!valuationHistory.value || valuationHistory.value.length === 0) {
+    return []
+  }
+
+  // 调试：检查 EPS 数据
+  const validEpsCount = valuationHistory.value.filter(r => r.eps && r.eps !== 0).length
+  const undefinedEpsCount = valuationHistory.value.filter(r => !r.eps).length
+  const zeroEpsCount = valuationHistory.value.filter(r => r.eps === 0).length
+  console.log(`[epsTrendData] 总记录数: ${valuationHistory.value.length}, 有效EPS: ${validEpsCount}, undefined: ${undefinedEpsCount}, 零值: ${zeroEpsCount}`)
+
+  // 按月份分组，每月取最后一个交易日的数据
+  const monthlyData: Record<string, { eps: number; date: string }> = {}
+
+  valuationHistory.value.forEach((record) => {
+    // 使用回测阶段存储的估值预测 EPS
+    // 放宽过滤条件：只要 eps 存在且不为 null/undefined 就使用（允许 0 或负值）
+    if (record.eps === null || record.eps === undefined) {
+      return
+    }
+
+    const date = new Date(record.date)
+    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+
+    // 使用每月最后一个数据点
+    monthlyData[monthKey] = {
+      eps: record.eps,
+      date: record.date
+    }
+  })
+
+  console.log(`[epsTrendData] 月度数据点数: ${Object.keys(monthlyData).length}`)
+
+  // 如果没有数据，返回空数组
+  if (Object.keys(monthlyData).length === 0) {
+    console.warn(`[epsTrendData] ⚠️ 没有有效的 EPS 数据可显示`)
+    return []
+  }
+
+  // 转换为数组并按日期排序
+  return Object.entries(monthlyData)
+    .map(([monthKey, data]) => {
+      const [year, month] = monthKey.split('-').map(Number)
+      return {
+        year: year * 100 + month,
+        month: monthKey,
+        eps: data.eps
+      }
+    })
+    .sort((a, b) => a.year - b.year)
+    .map(item => ({
+      year: item.month,
+      eps: item.eps
+    }))
+})
+
 // 交易明细分页
 const currentPage = ref(1)
 const pageSize = ref(20)
@@ -356,11 +495,23 @@ const loadResults = async () => {
   loading.value = true
   error.value = ''
   try {
+    console.log('[BacktestResults] Loading results for backtestId:', props.backtestId)
     const response = await backtestEngineApi.getBacktestResults(props.backtestId)
+    console.log('[BacktestResults] Response:', response)
     if (response.success) {
       results.value = response.data
+      // 检查是否为 MDVAES 策略
+      isMDVAESStrategy.value = response.data.strategy_id === 'mdvaes'
+      console.log('[BacktestResults] strategy_id:', response.data.strategy_id, 'isMDVAES:', isMDVAESStrategy.value)
       await nextTick()
       await initChart()
+      // 如果是 MDVAES 策略，加载估值历史
+      if (isMDVAESStrategy.value) {
+        console.log('[BacktestResults] Loading valuation history...')
+        await loadValuationHistory()
+      } else {
+        console.log('[BacktestResults] Not MDVAES strategy, skipping valuation history')
+      }
     } else {
       error.value = response.message || '获取回测结果失败'
       ElMessage.error(error.value)
@@ -371,6 +522,49 @@ const loadResults = async () => {
     console.error('加载回测结果失败:', err)
   } finally {
     loading.value = false
+  }
+}
+
+// 加载估值历史数据
+const loadValuationHistory = async () => {
+  if (!props.backtestId || !isMDVAESStrategy.value) {
+    console.log('[loadValuationHistory] Skipped - backtestId:', props.backtestId, 'isMDVAES:', isMDVAESStrategy.value)
+    return
+  }
+
+  valuationLoading.value = true
+  try {
+    console.log('[loadValuationHistory] Fetching valuation history for:', props.backtestId)
+    console.log('[loadValuationHistory] API URL:', `/api/backtest/${props.backtestId}/valuation-history`)
+
+    const response = await backtestEngineApi.getValuationHistory(props.backtestId)
+
+    console.log('[loadValuationHistory] ===== Full API Response =====')
+    console.log('[loadValuationHistory] response:', response)
+    console.log('[loadValuationHistory] response.success:', response.success)
+    console.log('[loadValuationHistory] response.data:', response.data)
+    console.log('[loadValuationHistory] response.data type:', typeof response.data)
+    console.log('[loadValuationHistory] response.data.valuation_history:', response.data?.valuation_history)
+    console.log('[loadValuationHistory] response.data.valuation_history type:', typeof response.data?.valuation_history)
+
+    if (response.success && response.data) {
+      valuationHistory.value = response.data.valuation_history || []
+      console.log('[loadValuationHistory] ✅ Loaded', valuationHistory.value.length, 'valuation records')
+      if (valuationHistory.value.length > 0) {
+        console.log('[loadValuationHistory] First record:', valuationHistory.value[0])
+      }
+    } else {
+      console.warn('[loadValuationHistory] ❌ Failed - response.success:', response.success)
+      console.warn('[loadValuationHistory] ❌ Failed - response.data:', response.data)
+      console.warn('[loadValuationHistory] ❌ Failed - response.message:', response.message)
+    }
+  } catch (err: any) {
+    console.error('[loadValuationHistory] ❌❌ Error:', err)
+    console.error('[loadValuationHistory] ❌❌ Error response:', err.response?.data)
+    console.error('[loadValuationHistory] ❌❌ Error status:', err.response?.status)
+    // 不显示错误提示，因为这是可选功能
+  } finally {
+    valuationLoading.value = false
   }
 }
 
@@ -624,9 +818,10 @@ const getWinRateClass = (value: number) => {
 }
 
 // 监听 backtestId 变化
-watch(() => props.backtestId, () => {
-  loadResults()
+watch(() => props.backtestId, async () => {
+  await loadResults()
   loadTrades()
+  // loadValuationHistory 会在 loadResults 内部根据策略类型调用
 })
 
 // 组件挂载

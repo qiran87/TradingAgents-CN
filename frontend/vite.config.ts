@@ -54,7 +54,12 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
         secure: false,
-        ws: true  // 🔥 启用 WebSocket 代理支持
+        ws: true,  // 🔥 启用 WebSocket 代理支持
+        configure: (proxy, options) => {
+          proxy.on('proxyReq', (proxyReq, req, res) => {
+            console.log('[Proxy] Forwarding request:', req.method, req.url, 'to', options.target + req.url)
+          })
+        }
       }
     }
   },

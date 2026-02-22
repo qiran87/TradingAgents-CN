@@ -479,6 +479,14 @@ async def get_backtest_results(
                 detail=f"回测结果不存在，请确认回测任务 {backtest_id} 已完成"
             )
 
+        # 确保响应包含 strategy_id 字段（从任务中获取）
+        if "strategy_id" not in result:
+            # strategy_id 可能直接在 task 中，也可能在 parameters 中
+            strategy_id = task.get("strategy_id") or task.get("parameters", {}).get("strategy_id", "unknown")
+            result["strategy_id"] = strategy_id
+
+        logger.info(f"📊 Returning backtest results for {backtest_id}: strategy_id={result.get('strategy_id')}")
+
         return ok(data=result)
 
     except HTTPException:

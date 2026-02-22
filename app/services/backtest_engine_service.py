@@ -10,7 +10,7 @@ import asyncio
 
 from app.core.database import get_mongo_db, get_redis_client
 from app.services.websocket_manager import get_websocket_manager
-from app.strategies.dual_ma import DualMAStrategy
+from app.strategies.registry import StrategyRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -336,16 +336,15 @@ class BacktestEngine:
                     logger.warning(f"⚠️  {trading_day} 没有行情数据，跳过")
                     continue
 
-                # 执行策略（这里暂时使用简单的买入持有策略作为示例）
-                # 实际应该从策略服务获取策略实例
-                signal = self._execute_sample_strategy(state, quote, trading_day, i)
+                # 执行策略
+                signal = self._execute_strategy(state, quote, trading_day, i)
 
                 # 执行交易
                 if signal["action"] in ["buy", "sell"]:
                     await self._execute_trade(backtest_id, state, signal, quote, trading_day)
 
-                # 更新每日状态
-                await self._update_daily_state(backtest_id, state, quote, trading_day, i)
+                # 更新每日状态（传入signal以保存估值数据）
+                await self._update_daily_state(backtest_id, state, quote, trading_day, i, signal)
 
                 # 更新进度
                 progress = (i + 1) / total_bars * 100
@@ -379,7 +378,7 @@ class BacktestEngine:
             logger.error(f"❌ 回测任务执行失败: {backtest_id}, 错误: {e}", exc_info=True)
             await self._handle_error(backtest_id, e)
 
-    def _execute_sample_strategy(
+    def _execute_strategy(
         self,
         state: BacktestState,
         quote: Dict,
@@ -387,9 +386,9 @@ class BacktestEngine:
         bar_index: int
     ) -> Dict[str, Any]:
         """
-        执行双均线策略
+        执行策略
 
-        使用真正的DualMAStrategy进行回测
+        根据 strategy_id 动态选择策略进行回测
 
         Args:
             state: 回测状态
@@ -402,22 +401,29 @@ class BacktestEngine:
         """
         # 初始化策略(如果还没有初始化)
         if not hasattr(self, 'strategy'):
-            # 获取策略参数
-            strategy_params = state.parameters.get('strategy_params', {})
+            # 获取策略ID和参数
+            strategy_id = state.parameters.get('strategy_id', 'dual_ma')
+            strategy_params = state.parameters.get('strategy_params', {}).copy()
 
-            # 兼容不同的参数名称
-            short_window = strategy_params.get('short_window',
-                           strategy_params.get('short_period', 5))
-            long_window = strategy_params.get('long_window',
-                           strategy_params.get('long_period', 20))
+            # 从回测参数中提取通用参数并添加到策略参数
+            # stock_code 是 MDVAES 策略需要的
+            if 'stock_code' in state.parameters:
+                strategy_params['symbol'] = state.parameters['stock_code']
 
-            # 初始化双均线策略
-            params = {
-                'short_window': short_window,
-                'long_window': long_window
-            }
-            self.strategy = DualMAStrategy(params)
-            logger.info(f"✅ 初始化双均线策略: short_window={short_window}, long_window={long_window}")
+            # 为双均线策略提供默认参数
+            if strategy_id == 'dual_ma':
+                strategy_params.setdefault('short_window', 5)
+                strategy_params.setdefault('long_window', 20)
+
+            # 使用 StrategyRegistry 创建策略实例
+            try:
+                self.strategy = StrategyRegistry.get_strategy(strategy_id, strategy_params)
+                logger.info(f"✅ 初始化策略: {strategy_id}, 参数: {strategy_params}")
+            except (ValueError, TypeError) as e:
+                logger.error(f"❌ 策略初始化失败: {e}")
+                # 策略初始化失败时抛出异常，不回退到默认策略
+                # 这样可以避免用户以为使用的是策略A，实际却是默认策略的情况
+                raise BacktestEngineError(f"策略 '{strategy_id}' 初始化失败: {e}") from e
 
         # 调用策略生成信号
         timestamp = datetime.strptime(date, '%Y-%m-%d')
@@ -735,7 +741,8 @@ class BacktestEngine:
         state: BacktestState,
         quote: Dict,
         date: str,
-        bar_index: int
+        bar_index: int,
+        signal: Dict[str, Any] = None
     ):
         """
         更新每日状态
@@ -746,6 +753,7 @@ class BacktestEngine:
             quote: 行情数据
             date: 日期
             bar_index: K线索引
+            signal: 交易信号（用于提取估值元数据）
         """
         market_value = state.get_market_value(quote["close"])
         total_assets = state.get_total_assets(quote["close"])
@@ -775,6 +783,28 @@ class BacktestEngine:
             "profit_loss": round(profit_loss, 2),
             "created_at": datetime.now(timezone.utc)
         }
+
+        # 如果策略返回了估值元数据，保存到每日状态
+        if signal and "metadata" in signal:
+            metadata = signal["metadata"]
+            # 只保存包含估值指标的元数据
+            if any(key in metadata for key in ["intrinsic_value", "lower_bound", "upper_bound", "confidence"]):
+                eps_value = metadata.get("eps")
+                logger.info(f"📊 保存估值元数据: date={date}, eps={eps_value}, eps_type={type(eps_value)}")
+
+                daily_state_doc["valuation"] = {
+                    "intrinsic_value": metadata.get("intrinsic_value"),
+                    "lower_bound": metadata.get("lower_bound"),
+                    "upper_bound": metadata.get("upper_bound"),
+                    "confidence": metadata.get("confidence"),
+                    "signal": metadata.get("signal", signal.get("action")),
+                    "valuation_method": metadata.get("valuation_method"),
+                    "peg_value": metadata.get("peg_value"),
+                    "pe_value": metadata.get("pe_value"),
+                    "pb_value": metadata.get("pb_value"),
+                    "dcf_value": metadata.get("dcf_value"),
+                    "eps": eps_value  # 存储回测阶段使用的 EPS
+                }
 
         await self.db.backtest_daily_states.insert_one(daily_state_doc)
 

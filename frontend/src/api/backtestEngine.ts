@@ -145,10 +145,30 @@ export interface EquityCurve {
 }
 
 /**
+ * MDVAES 估值历史数据点
+ */
+export interface ValuationHistoryDataPoint {
+  date: string                            // 日期
+  current_price: number                   // 当前价格
+  intrinsic_value: number                  // 内在价值
+  lower_bound: number                     // 估值下限
+  upper_bound: number                     // 估值上限
+  confidence: number                      // 置信度
+  signal: string                          // 交易信号
+  valuation_method?: any                   // 估值方法详情（完整字典）
+  peg_value?: number                       // PEG 估值
+  pe_value?: number                        // PE 估值
+  pb_value?: number                        // PB 估值
+  dcf_value?: number                       // DCF 估值
+  eps?: number                             // 估值预测 EPS（用于计算估值，不是历史财报 EPS）
+}
+
+/**
  * 回测结果
  */
 export interface BacktestResults {
   backtest_id: string                     // 回测任务ID
+  strategy_id: string                      // 策略ID
   return_metrics: ReturnMetrics           // 收益指标
   risk_metrics: RiskMetrics               // 风险指标
   risk_adjusted_metrics: RiskAdjustedMetrics  // 风险调整收益指标
@@ -273,6 +293,21 @@ export const backtestEngineApi = {
   async getEquityCurve(backtestId: string) {
     return ApiClient.get<EquityCurve>(
       `/api/backtest/${backtestId}/equity-curve`
+    )
+  },
+
+  /**
+   * 获取MDVAES估值历史数据
+   * @param backtestId 回测任务ID
+   */
+  async getValuationHistory(backtestId: string) {
+    return ApiClient.get<{
+      backtest_id: string
+      strategy_id: string
+      total_count: number
+      valuation_history: ValuationHistoryDataPoint[]
+    }>(
+      `/api/backtest/${backtestId}/valuation-history`
     )
   },
 

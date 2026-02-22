@@ -712,8 +712,8 @@ const strategies = ref([
     is_builtin: true,
     category: 'trend',
     parameters: [
-      { name: 'short_period', label: '短期均线', type: 'number', min: 5, max: 20, step: 1, default: 5 },
-      { name: 'long_period', label: '长期均线', type: 'number', min: 20, max: 60, step: 1, default: 20 }
+      { name: 'short_period', label: '短期均线', type: 'number', min: 5, max: 20, step: 1, default: 5, precision: 0 },
+      { name: 'long_period', label: '长期均线', type: 'number', min: 20, max: 60, step: 1, default: 20, precision: 0 }
     ]
   },
   {
@@ -732,13 +732,13 @@ const strategies = ref([
     category: 'valuation',
     parameters: [
       { name: 'symbol', label: '股票代码', type: 'string', default: '000001.SZ' },
-      { name: 'forecast_years', label: 'EPS预测年数', type: 'number', min: 1, max: 10, step: 1, default: 5 },
-      { name: 'peg_base', label: 'PEG基数', type: 'number', min: 0.5, max: 2.0, step: 0.1, default: 1.0 },
-      { name: 'risk_adjustment', label: '风险调整幅度', type: 'number', min: 0, max: 0.3, step: 0.01, default: 0.1 },
-      { name: 'rebalance_frequency', label: '重新估值频率(天)', type: 'number', min: 1, max: 365, step: 1, default: 90 },
+      { name: 'forecast_years', label: 'EPS预测年数', type: 'number', min: 1, max: 10, step: 1, default: 5, precision: 0 },
+      { name: 'peg_base', label: 'PEG基数', type: 'number', min: 0.5, max: 2.0, step: 0.1, default: 1.0, precision: 2 },
+      { name: 'risk_adjustment', label: '风险调整幅度', type: 'number', min: 0, max: 0.3, step: 0.01, default: 0.1, precision: 3 },
+      { name: 'rebalance_frequency', label: '重新估值频率(天)', type: 'number', min: 1, max: 365, step: 1, default: 90, precision: 0 },
       { name: 'use_margin', label: '使用安全边际', type: 'boolean', default: true },
-      { name: 'margin_buy', label: '买入安全边际', type: 'number', min: 0.5, max: 0.95, step: 0.05, default: 0.8 },
-      { name: 'margin_sell', label: '卖出安全边际', type: 'number', min: 1.05, max: 2.0, step: 0.05, default: 1.2 }
+      { name: 'margin_buy', label: '买入安全边际', type: 'number', min: 0.5, max: 0.95, step: 0.05, default: 0.8, precision: 3 },
+      { name: 'margin_sell', label: '卖出安全边际', type: 'number', min: 1.05, max: 2.0, step: 0.05, default: 1.2, precision: 3 }
     ]
   }
 ])

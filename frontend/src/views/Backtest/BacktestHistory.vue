@@ -39,6 +39,7 @@
           >
             <el-option label="双均线策略" value="dual_ma" />
             <el-option label="买入持有策略" value="buy_and_hold" />
+            <el-option label="MDVAES 估值策略" value="mdvaes" />
           </el-select>
         </el-form-item>
 
@@ -816,7 +817,8 @@ const handleRestore = async (recordId: string) => {
 const getStrategyName = (strategyId: string) => {
   const strategyMap: Record<string, string> = {
     dual_ma: '双均线策略',
-    buy_and_hold: '买入持有策略'
+    buy_and_hold: '买入持有策略',
+    mdvaes: 'MDVAES 估值策略'
   }
   return strategyMap[strategyId] || strategyId
 }

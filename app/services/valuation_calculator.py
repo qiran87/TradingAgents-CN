@@ -56,10 +56,10 @@ class ValuationCalculator:
         lower_bound = adjusted_valuation - margin
         upper_bound = adjusted_valuation + margin
 
-        # 8. 生成交易信号
-        signal = ValuationCalculator._generate_signal(
-            adjusted_valuation, lower_bound, upper_bound, params
-        )
+        # 8. 生成交易信号（注意：此时还没有当前价格，信号将在策略执行时根据价格生成）
+        # 信号生成需要当前价格，但估值计算时没有价格信息
+        # 因此这里只返回估值结果，信号由策略根据价格动态生成
+        signal = SignalType.HOLD  # 默认持有，策略会根据价格重新计算
 
         return ValuationResult(
             intrinsic_value=adjusted_valuation,
@@ -72,7 +72,8 @@ class ValuationCalculator:
                 "pb": pb_valuation,
                 "dcf": dcf_valuation
             },
-            signal=signal
+            signal=signal,
+            eps=eps  # 存储当前使用的 EPS
         )
 
     @staticmethod

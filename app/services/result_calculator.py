@@ -88,6 +88,7 @@ class ResultCalculator:
             # 4. 计算所有指标
             results = {
                 "backtest_id": backtest_id,
+                "strategy_id": task.get("parameters", {}).get("strategy_id", "unknown"),
                 "return_metrics": self._calculate_return_metrics(daily_states),
                 "risk_metrics": self._calculate_risk_metrics(daily_states),
                 "risk_adjusted_metrics": self._calculate_risk_adjusted_metrics(daily_states),

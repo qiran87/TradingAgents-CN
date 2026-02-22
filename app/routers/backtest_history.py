@@ -456,3 +456,98 @@ async def export_history(
     except Exception as e:
         logger.error(f"❌ 导出历史记录失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"导出历史记录失败: {str(e)}")
+
+
+@router.get("/{backtest_id}/valuation-history", response_model=dict)
+async def get_valuation_history(
+    backtest_id: str,
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_mongo_db)
+):
+    """
+    获取估值历史数据
+
+    获取 MDVAES 策略回测的每日估值历史，包括：
+    - 内在价值
+    - 估值上下限
+    - 当前价格
+    - 交易信号
+
+    Args:
+        backtest_id: 回测任务ID
+        current_user: 当前用户
+        db: MongoDB数据库
+
+    Returns:
+        估值历史时间序列数据
+
+    示例：
+        - GET /api/backtest/bt_20240205_143055_123456/valuation-history
+    """
+    try:
+        # 1. 验证回测任务存在且属于当前用户
+        task = await db.backtest_tasks.find_one({"backtest_id": backtest_id})
+        if not task:
+            raise HTTPException(status_code=404, detail=f"回测任务 {backtest_id} 不存在")
+
+        user_id = current_user.get("sub", "default")
+        logger.info(f"🔍 估值历史 API 调用: backtest_id={backtest_id}, current_user={user_id}, task_user={task.get('user_id')}")
+
+        if task.get("user_id") != user_id:
+            logger.warning(f"❌ 用户权限不匹配: current_user={user_id}, task_user={task.get('user_id')}")
+            raise HTTPException(status_code=403, detail="无权访问此回测任务")
+
+        # 2. 检查是否为估值策略
+        strategy_id = task.get("strategy_id") or task.get("parameters", {}).get("strategy_id", "")
+        if strategy_id != "mdvaes":
+            return ok(data={
+                "backtest_id": backtest_id,
+                "strategy_id": strategy_id,
+                "valuation_history": [],
+                "message": f"策略 {strategy_id} 不支持估值数据"
+            })
+
+        # 3. 查询每日状态中的估值数据
+        logger.info(f"🔍 查询估值历史: backtest_id={backtest_id}")
+        cursor = db.backtest_daily_states.find(
+            {"backtest_id": backtest_id, "valuation": {"$exists": True}},
+            sort=[("bar_index", 1)]
+        )
+
+        valuation_history = await cursor.to_list(length=None)
+        logger.info(f"✅ 查询到 {len(valuation_history)} 条估值记录")
+
+        # 4. 格式化返回数据
+        formatted_history = []
+        for item in valuation_history:
+            valuation = item.get("valuation", {})
+            formatted_history.append({
+                "date": item["date"],
+                "current_price": item.get("current_price"),
+                "intrinsic_value": valuation.get("intrinsic_value"),
+                "lower_bound": valuation.get("lower_bound"),
+                "upper_bound": valuation.get("upper_bound"),
+                "confidence": valuation.get("confidence"),
+                "signal": valuation.get("signal"),
+                "valuation_method": valuation.get("valuation_method"),
+                # 估值方法详情
+                "peg_value": valuation.get("peg_value"),
+                "pe_value": valuation.get("pe_value"),
+                "pb_value": valuation.get("pb_value"),
+                "dcf_value": valuation.get("dcf_value"),
+                # EPS（回测阶段计算时使用的 EPS）
+                "eps": valuation.get("eps")
+            })
+
+        return ok(data={
+            "backtest_id": backtest_id,
+            "strategy_id": strategy_id,
+            "total_count": len(formatted_history),
+            "valuation_history": formatted_history
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 获取估值历史失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取估值历史失败: {str(e)}")

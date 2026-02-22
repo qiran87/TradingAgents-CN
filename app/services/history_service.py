@@ -450,6 +450,10 @@ class HistoryService:
             history.pop("_id", None)
             results.pop("_id", None)
 
+            # 确保结果包含 strategy_id 字段（从历史记录的 parameters 中获取）
+            if "strategy_id" not in results:
+                results["strategy_id"] = history.get("parameters", {}).get("strategy_id", "unknown")
+
             logger.info(f"📄 获取历史记录详情: {record_id}")
 
             return {

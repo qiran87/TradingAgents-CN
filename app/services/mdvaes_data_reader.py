@@ -3,11 +3,29 @@
 from typing import List, Optional
 from datetime import datetime
 from app.core.database import get_mongo_db
+from app.core.config import settings
 from app.domain.mdvaes import EPSForecast
+import pymongo
 
 
 class MDVAESDataReader:
     """MDVAES 数据读取器"""
+
+    def __init__(self):
+        """初始化数据读取器"""
+        self._sync_client = None  # 延迟初始化的同步客户端
+
+    def _get_sync_db(self):
+        """获取同步 MongoDB 客户端（用于从同步上下文调用）"""
+        if self._sync_client is None:
+            self._sync_client = pymongo.MongoClient(
+                settings.MONGODB_HOST,
+                settings.MONGODB_PORT,
+                username=settings.MONGODB_USERNAME,
+                password=settings.MONGODB_PASSWORD,
+                authSource=settings.MONGODB_AUTH_SOURCE
+            )
+        return self._sync_client[settings.MONGODB_DATABASE]
 
     async def get_eps_forecast(
         self,
@@ -298,3 +316,114 @@ class MDVAESDataReader:
             }
 
         return None
+
+    # ===================== 同步方法（用于从同步上下文调用）=====================
+
+    def get_eps_forecast_sync(
+        self,
+        symbol: str,
+        calculation_date: str,
+        forecast_years: int
+    ) -> List[EPSForecast]:
+        """获取 EPS 预测数据（同步版本）
+
+        优先使用分析师预测，不足时使用历史数据外推
+        """
+        db = self._get_sync_db()
+
+        # 1. 尝试从分析师预测获取
+        analyst_forecasts = self._get_analyst_forecasts_sync(
+            db, symbol, calculation_date, forecast_years
+        )
+
+        if analyst_forecasts:
+            return analyst_forecasts
+
+        # 2. 如果分析师预测不足，使用历史 EPS 外推
+        historical_eps = self._get_historical_eps_sync(db, symbol, calculation_date)
+        if len(historical_eps) >= 2:
+            return self._extrapolate_eps(historical_eps, forecast_years)
+
+        raise ValueError(f"无法获取 {symbol} 的 EPS 数据")
+
+    def _get_analyst_forecasts_sync(
+        self,
+        db,
+        symbol: str,
+        calculation_date: str,
+        forecast_years: int
+    ) -> Optional[List[EPSForecast]]:
+        """从分析师预测获取 EPS（同步版本）"""
+        current_year = datetime.strptime(calculation_date, "%Y-%m-%d").year
+        calculation_date_yyyymmdd = calculation_date.replace("-", "")
+
+        forecasts = list(db.mdvaes_analyst_forecasts.find({
+            "ts_code": symbol,
+            "report_date": {"$lt": calculation_date_yyyymmdd},
+            "eps": {"$ne": None, "$exists": True}
+        }).sort("report_date", -1).limit(forecast_years * 2))
+
+        if not forecasts:
+            return None
+
+        # 按年份去重，取最新预测
+        latest_by_year = {}
+        for f in forecasts:
+            year = self._extract_year_from_quarter(f.get("quarter", ""))
+            eps_val = f.get("eps")
+            if year and year >= current_year and year <= current_year + forecast_years and eps_val is not None:
+                if year not in latest_by_year or f["report_date"] > latest_by_year[year]["report_date"]:
+                    latest_by_year[year] = f
+
+        if not latest_by_year:
+            return None
+
+        return [
+            EPSForecast(
+                year=year,
+                eps_forecast=f["eps"],
+                forecast_date=datetime.strptime(f["report_date"], "%Y%m%d").strftime("%Y-%m-%d"),
+                analyst_count=1,
+                source="analyst"
+            )
+            for year, f in sorted(latest_by_year.items())
+        ]
+
+    def _get_historical_eps_sync(self, db, symbol: str, calculation_date: str, limit: int = 5) -> List[dict]:
+        """获取历史 EPS 数据（同步版本）"""
+        calculation_date_yyyymmdd = calculation_date.replace("-", "")
+
+        historical_eps = list(db.mdvaes_eps_history.find({
+            "ts_code": symbol,
+            "ann_date": {"$lt": calculation_date_yyyymmdd},
+            "eps": {"$ne": None, "$exists": True}
+        }).sort("ann_date", -1).limit(limit))
+
+        filtered = [ep for ep in historical_eps if ep.get("eps") is not None]
+        return filtered
+
+    def get_current_pe_sync(self, symbol: str, calculation_date: str) -> Optional[float]:
+        """获取当前 PE（同步版本）"""
+        db = self._get_sync_db()
+        calculation_date_yyyymmdd = calculation_date.replace("-", "")
+
+        pe_data = db.mdvaes_pe_history.find_one({
+            "ts_code": symbol,
+            "trade_date": {"$lt": calculation_date_yyyymmdd}
+        }, sort=[("trade_date", -1)])
+
+        return pe_data["pe_ttm"] if pe_data else None
+
+    def get_bond_rate_sync(self, calculation_date: str) -> Optional[float]:
+        """获取 10 年期国债收益率（同步版本）"""
+        db = self._get_sync_db()
+        calculation_date_yyyymmdd = calculation_date.replace("-", "")
+
+        bond_data = db.mdvaes_bond_rate.find_one({
+            "trade_date": {"$lt": calculation_date_yyyymmdd},
+            "curve_term": 10.0
+        }, sort=[("trade_date", -1)])
+
+        if bond_data:
+            return bond_data.get("yield", 0) / 100
+        return 0.0275

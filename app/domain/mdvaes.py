@@ -66,6 +66,7 @@ class ValuationResult:
     confidence: float  # 置信度 (0-1)
     valuation_method: Dict[str, float]  # 各方法估值
     signal: SignalType  # 交易信号
+    eps: float  # 当前使用的 EPS（来自历史数据或预测）
 
 
 @dataclass(frozen=True)
