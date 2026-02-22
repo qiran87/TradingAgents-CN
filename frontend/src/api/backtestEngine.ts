@@ -178,6 +178,16 @@ export interface BacktestResults {
 }
 
 /**
+ * 交易信号
+ */
+export interface TradeSignal {
+  action: 'buy' | 'sell' | 'hold'         // 操作类型
+  amount: number                          // 交易数量
+  reason?: string                         // 决策原因
+  metadata?: Record<string, any>          // 策略元数据（估值详情等）
+}
+
+/**
  * 交易记录
  */
 export interface TradeRecord {
@@ -196,7 +206,8 @@ export interface TradeRecord {
   position_before: number                 // 交易前持仓
   position_after: number                  // 交易后持仓
   cost_basis?: number                     // 成本基(卖出时)
-  signal: any                             // 交易信号
+  profit_loss?: number                    // 盈亏金额
+  signal?: TradeSignal                    // 交易信号
   created_at: string                      // 创建时间
 }
 

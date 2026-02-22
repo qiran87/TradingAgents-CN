@@ -358,6 +358,68 @@
               </template>
             </el-table-column>
             <el-table-column prop="position_after" label="交易后持仓" width="100" />
+            <el-table-column label="决策详情" min-width="250" fixed="right">
+              <template #default="{ row }">
+                <div v-if="row.signal && row.signal.reason" class="decision-reason">
+                  {{ row.signal.reason }}
+                </div>
+                <div v-if="row.signal && row.signal.metadata" class="decision-metadata">
+                  <el-popover
+                    placement="left"
+                    :width="400"
+                    trigger="click"
+                  >
+                    <template #reference>
+                      <el-button size="small" text type="primary">
+                        <el-icon><InfoFilled /></el-icon>
+                        详细参数
+                      </el-button>
+                    </template>
+                    <div class="metadata-detail">
+                      <div class="metadata-item">
+                        <span class="metadata-label">内在价值:</span>
+                        <span class="metadata-value">¥{{ formatNumber(row.signal.metadata.intrinsic_value) }}</span>
+                      </div>
+                      <div class="metadata-item">
+                        <span class="metadata-label">估值下限:</span>
+                        <span class="metadata-value">¥{{ formatNumber(row.signal.metadata.lower_bound) }}</span>
+                      </div>
+                      <div class="metadata-item">
+                        <span class="metadata-label">估值上限:</span>
+                        <span class="metadata-value">¥{{ formatNumber(row.signal.metadata.upper_bound) }}</span>
+                      </div>
+                      <div class="metadata-item">
+                        <span class="metadata-label">置信度:</span>
+                        <span class="metadata-value">{{ (row.signal.metadata.confidence * 100).toFixed(1) }}%</span>
+                      </div>
+                      <div v-if="row.signal.metadata.eps !== undefined" class="metadata-item">
+                        <span class="metadata-label">EPS预测:</span>
+                        <span class="metadata-value">¥{{ formatNumber(row.signal.metadata.eps) }}</span>
+                      </div>
+                      <el-divider style="margin: 8px 0;" />
+                      <div class="metadata-title">各估值方法结果:</div>
+                      <div v-if="row.signal.metadata.peg_value !== undefined" class="metadata-item">
+                        <span class="metadata-label">PEG估值:</span>
+                        <span class="metadata-value">¥{{ formatNumber(row.signal.metadata.peg_value) }}</span>
+                      </div>
+                      <div v-if="row.signal.metadata.pe_value !== undefined" class="metadata-item">
+                        <span class="metadata-label">PE估值:</span>
+                        <span class="metadata-value">¥{{ formatNumber(row.signal.metadata.pe_value) }}</span>
+                      </div>
+                      <div v-if="row.signal.metadata.pb_value !== undefined" class="metadata-item">
+                        <span class="metadata-label">PB估值:</span>
+                        <span class="metadata-value">¥{{ formatNumber(row.signal.metadata.pb_value) }}</span>
+                      </div>
+                      <div v-if="row.signal.metadata.dcf_value !== undefined" class="metadata-item">
+                        <span class="metadata-label">DCF估值:</span>
+                        <span class="metadata-value">¥{{ formatNumber(row.signal.metadata.dcf_value) }}</span>
+                      </div>
+                    </div>
+                  </el-popover>
+                </div>
+                <div v-else class="no-decision-info">-</div>
+              </template>
+            </el-table-column>
           </el-table>
 
           <!-- 分页 -->
@@ -391,7 +453,8 @@ import {
   Refresh,
   Download,
   Picture,
-  ArrowDown
+  ArrowDown,
+  InfoFilled
 } from '@element-plus/icons-vue'
 import { backtestEngineApi, type BacktestResults, type TradeRecord, type ValuationHistoryDataPoint } from '@/api/backtestEngine'
 import { backtestExportApi, chartExportUtils } from '@/api/backtestExport'
@@ -734,6 +797,12 @@ const formatPercentage = (value: number) => {
   return (value * 100).toFixed(2) + '%'
 }
 
+// 格式化数字（保留2位小数）
+const formatNumber = (value: number | undefined) => {
+  if (value === undefined || value === null) return '-'
+  return value.toFixed(2)
+}
+
 // 导出Excel
 const handleExportExcel = async () => {
   if (!props.backtestId) {
@@ -982,6 +1051,58 @@ onUnmounted(() => {
         display: flex;
         justify-content: center;
       }
+
+      // 决策详情样式
+      .decision-reason {
+        font-size: 13px;
+        color: #606266;
+        line-height: 1.5;
+        max-width: 250px;
+        word-break: break-all;
+      }
+
+      .decision-metadata {
+        margin-top: 4px;
+      }
+
+      .no-decision-info {
+        color: #c0c4cc;
+        font-size: 13px;
+      }
+    }
+  }
+}
+</style>
+
+<style lang="scss">
+// 元数据详情弹出框样式（全局生效）
+.metadata-detail {
+  .metadata-title {
+    font-weight: 600;
+    color: #303133;
+    margin-bottom: 8px;
+    font-size: 14px;
+  }
+
+  .metadata-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px dashed #e4e7ed;
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    .metadata-label {
+      color: #909399;
+      font-size: 13px;
+    }
+
+    .metadata-value {
+      color: #303133;
+      font-size: 13px;
+      font-weight: 500;
     }
   }
 }
