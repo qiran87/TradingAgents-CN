@@ -735,7 +735,7 @@ const strategies = ref([
       { name: 'forecast_years', label: 'EPS预测年数', type: 'number', min: 1, max: 10, step: 1, default: 5, precision: 0 },
       { name: 'peg_base', label: 'PEG基数', type: 'number', min: 0.5, max: 2.0, step: 0.1, default: 1.0, precision: 2 },
       { name: 'risk_adjustment', label: '风险调整幅度', type: 'number', min: 0, max: 0.3, step: 0.01, default: 0.1, precision: 3 },
-      { name: 'rebalance_frequency', label: '重新估值频率(天)', type: 'number', min: 1, max: 365, step: 1, default: 90, precision: 0 },
+      { name: 'rebalance_frequency', label: '重新估值频率(天)', type: 'number', min: 1, max: 365, step: 1, default: 30, precision: 0 },
       { name: 'use_margin', label: '使用安全边际', type: 'boolean', default: true },
       { name: 'margin_buy', label: '买入安全边际', type: 'number', min: 0.5, max: 0.95, step: 0.05, default: 0.8, precision: 3 },
       { name: 'margin_sell', label: '卖出安全边际', type: 'number', min: 1.05, max: 2.0, step: 0.05, default: 1.2, precision: 3 }
@@ -1051,6 +1051,30 @@ function handleKeydown(event: KeyboardEvent) {
     showHelpDialog.value = false
   }
 }
+
+// 监听策略选择变化，自动填充默认参数值
+watch(() => form.value.strategy_id, (newStrategyId, oldStrategyId) => {
+  if (newStrategyId && newStrategyId !== oldStrategyId) {
+    const strategy = strategies.value.find(s => s.id === newStrategyId)
+    if (strategy && strategy.parameters && strategy.parameters.length > 0) {
+      // 重置策略参数
+      form.value.strategy_params = {}
+
+      // 填充每个参数的默认值
+      strategy.parameters.forEach(param => {
+        if (param.default !== undefined) {
+          form.value.strategy_params[param.name] = param.default
+        }
+      })
+    } else {
+      // 如果策略没有参数，清空参数对象
+      form.value.strategy_params = {}
+    }
+
+    // 重置策略确认状态
+    strategyConfirmed.value = false
+  }
+})
 
 // 生命周期
 onMounted(() => {
