@@ -53,7 +53,7 @@ const updateChart = () => {
 
         params.forEach((param: any) => {
           if (param.value != null) {
-            const value = param.value.toFixed(2)
+            const value = param.value.toFixed(3)
             tooltip += `${param.marker} EPS: ${value} 元<br/>`
           }
         })

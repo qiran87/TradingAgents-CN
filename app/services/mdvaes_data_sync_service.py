@@ -23,11 +23,76 @@ from requests.exceptions import Timeout, ConnectionError
 logger = logging.getLogger(__name__)
 
 
+class RateLimiter:
+    """滑动窗口限流器
+
+    用于限制 API 调用频率，避免超过 Tushare 的访问限制。
+
+    Args:
+        max_calls: 时间窗口内允许的最大调用次数
+        window_seconds: 时间窗口大小（秒）
+    """
+
+    def __init__(self, max_calls: int, window_seconds: int):
+        self.max_calls = max_calls
+        self.window_seconds = window_seconds
+        self.calls = []  # 存储每次调用的时间戳
+        self._lock = asyncio.Lock()
+
+    async def acquire(self):
+        """获取调用许可，如果超过限制则等待
+
+        使用滑动窗口算法：
+        - 移除窗口外的旧调用记录
+        - 如果当前窗口内调用次数达到上限，则等待
+        - 记录本次调用时间
+        """
+        async with self._lock:
+            now = datetime.now()
+            window_start = now - timedelta(seconds=self.window_seconds)
+
+            # 移除窗口外的旧调用记录
+            self.calls = [call_time for call_time in self.calls if call_time > window_start]
+
+            # 检查是否超过限制
+            if len(self.calls) >= self.max_calls:
+                # 计算需要等待的时间（窗口内最早调用的过期时间）
+                oldest_call = self.calls[0]
+                wait_time = (oldest_call + timedelta(seconds=self.window_seconds) - now).total_seconds()
+                if wait_time > 0:
+                    logger.debug(
+                        f"🚦 [限流] 达到上限 ({self.max_calls}次/{self.window_seconds}秒)，"
+                        f"等待 {wait_time:.2f} 秒..."
+                    )
+                    await asyncio.sleep(wait_time)
+                    # 等待后再次清理旧记录
+                    window_start = datetime.now() - timedelta(seconds=self.window_seconds)
+                    self.calls = [call_time for call_time in self.calls if call_time > window_start]
+
+            # 记录本次调用
+            self.calls.append(now)
+            logger.debug(
+                f"🚦 [限流] 当前窗口调用次数: {len(self.calls)}/{self.max_calls}"
+            )
+
+
 class MDVAESDataSyncService:
     """MDVAES 数据同步服务"""
 
+    # Tushare 接口限流配置
+    RATE_LIMITS = {
+        "fina_indicator": (180, 60),  # 每分钟180次
+        "daily_basic": (180, 60),     # 每分钟180次
+        "stock_basic": (180, 60),     # 每分钟180次
+        "default": (180, 60)           # 默认每分钟180次
+    }
+
     def __init__(self):
         self.pro = ts.pro_api(settings.TUSHARE_TOKEN)
+        # 为每个接口创建独立的限流器
+        self._limiters = {}
+        for api_name, (max_calls, window) in self.RATE_LIMITS.items():
+            self._limiters[api_name] = RateLimiter(max_calls, window)
 
     def _log_retry_attempt(self, retry_state):
         """记录重试尝试"""
@@ -36,13 +101,14 @@ class MDVAESDataSyncService:
             f"(第 {retry_state.attempt_number} 次，最多 3 次)"
         )
 
-    async def _call_tushare_with_retry(self, func, *args, **kwargs):
+    async def _call_tushare_with_retry(self, func, *args, api_name: str = "default", **kwargs):
         """
-        带重试机制的 Tushare API 调用包装器
+        带重试机制和限流的 Tushare API 调用包装器
 
         Args:
             func: Tushare pro API 方法
             *args, **kwargs: 传递给 API 方法的参数
+            api_name: API 名称，用于选择对应的限流器（如 "fina_indicator"）
 
         Returns:
             API 返回结果
@@ -50,6 +116,11 @@ class MDVAESDataSyncService:
         Raises:
             最后一次失败后的异常
         """
+        # 获取对应的限流器
+        limiter = self._limiters.get(api_name, self._limiters["default"])
+
+        # 限流：等待获取调用许可
+        await limiter.acquire()
         # 定义同步的包装函数（因为 tenacity 需要同步函数）
         def sync_wrapper():
             return func(*args, **kwargs)
@@ -586,7 +657,8 @@ class MDVAESDataSyncService:
                 self.pro.daily_basic,
                 ts_code="",
                 trade_date=trade_date,
-                fields="ts_code,trade_date,pe,pe_ttm,pb,ps"
+                fields="ts_code,trade_date,pe,pe_ttm,pb,ps",
+                api_name="daily_basic"
             )
 
             if df.empty:
@@ -833,7 +905,8 @@ class MDVAESDataSyncService:
         stock_df = await self._call_tushare_with_retry(
             self.pro.stock_basic,
             list_status='L',
-            fields='ts_code,symbol,name'
+            fields='ts_code,symbol,name',
+            api_name="stock_basic"
         )
 
         if stock_df.empty:
@@ -853,7 +926,9 @@ class MDVAESDataSyncService:
         logger.info(f"  📅 计划同步 {len(years)} 个年份的财务比率数据")
 
         # 3. 按年份和股票批次同步
-        batch_size = 100  # 每次查询100只股票
+        # 注意：Tushare fina_indicator 接口有约 100 条记录的返回限制
+        # 批量大小设为 20 以确保所有股票数据都能被返回
+        batch_size = 20  # 每次查询20只股票
 
         for year in years:
             year_start = f"{year}0101"
@@ -870,13 +945,21 @@ class MDVAESDataSyncService:
                         ts_code=ts_codes_str,
                         start_date=year_start,
                         end_date=year_end,
-                        fields="ts_code,ann_date,end_date,debt_to_assets,current_ratio,quick_ratio,roe,roa"
+                        fields="ts_code,ann_date,end_date,debt_to_assets,current_ratio,quick_ratio,roe,roa",
+                        api_name="fina_indicator"
                     )
 
                     if df.empty:
+                        logger.warning(f"    ⚠️ {year} 年 批次 {i//batch_size + 1}: 返回空数据（{len(batch_codes)} 只股票）")
                         continue
 
-                    logger.info(f"    📊 {year} 年 批次 {i//batch_size + 1}: 返回 {len(df)} 条记录")
+                    # 检查数据完整性：验证本批次所有股票都有数据
+                    unique_stocks_in_df = df['ts_code'].unique()
+                    missing_stocks = set(batch_codes) - set(unique_stocks_in_df)
+                    if missing_stocks:
+                        logger.warning(f"    ⚠️ {year} 年 批次 {i//batch_size + 1}: {len(missing_stocks)} 只股票无数据: {list(missing_stocks)[:5]}{'...' if len(missing_stocks) > 5 else ''}")
+
+                    logger.info(f"    📊 {year} 年 批次 {i//batch_size + 1}: 返回 {len(df)} 条记录，覆盖 {len(unique_stocks_in_df)}/{len(batch_codes)} 只股票")
 
                     from pymongo import UpdateOne
                     operations = []
@@ -926,7 +1009,8 @@ class MDVAESDataSyncService:
         stock_df = await self._call_tushare_with_retry(
             self.pro.stock_basic,
             list_status='L',
-            fields='ts_code,symbol,name'
+            fields='ts_code,symbol,name',
+            api_name="stock_basic"
         )
 
         if stock_df.empty:
@@ -946,7 +1030,9 @@ class MDVAESDataSyncService:
         logger.info(f"  📅 计划同步 {len(years)} 个年份的 EPS 历史数据")
 
         # 3. 按年份和股票批次同步
-        batch_size = 100  # 每次查询100只股票
+        # 注意：Tushare fina_indicator 接口有约 100 条记录的返回限制
+        # 批量大小设为 20 以确保所有股票数据都能被返回
+        batch_size = 20  # 每次查询20只股票
 
         for year in years:
             year_start = f"{year}0101"
@@ -963,13 +1049,21 @@ class MDVAESDataSyncService:
                         ts_code=ts_codes_str,
                         start_date=year_start,
                         end_date=year_end,
-                        fields="ts_code,ann_date,end_date,eps,dt_eps"
+                        fields="ts_code,ann_date,end_date,eps,dt_eps",
+                        api_name="fina_indicator"
                     )
 
                     if df.empty:
+                        logger.warning(f"    ⚠️ {year} 年 批次 {i//batch_size + 1}: 返回空数据（{len(batch_codes)} 只股票）")
                         continue
 
-                    logger.info(f"    📊 {year} 年 批次 {i//batch_size + 1}: 返回 {len(df)} 条记录")
+                    # 检查数据完整性：验证本批次所有股票都有数据
+                    unique_stocks_in_df = df['ts_code'].unique()
+                    missing_stocks = set(batch_codes) - set(unique_stocks_in_df)
+                    if missing_stocks:
+                        logger.warning(f"    ⚠️ {year} 年 批次 {i//batch_size + 1}: {len(missing_stocks)} 只股票无数据: {list(missing_stocks)[:5]}{'...' if len(missing_stocks) > 5 else ''}")
+
+                    logger.info(f"    📊 {year} 年 批次 {i//batch_size + 1}: 返回 {len(df)} 条记录，覆盖 {len(unique_stocks_in_df)}/{len(batch_codes)} 只股票")
 
                     from pymongo import UpdateOne
                     operations = []
