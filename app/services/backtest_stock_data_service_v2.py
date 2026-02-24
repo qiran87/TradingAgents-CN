@@ -348,14 +348,14 @@ class BacktestStockDataService:
 
     async def search_stocks(self, keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
-        搜索股票（改进版）
+        搜索股票（同时搜索两个表并合并结果）
 
         Args:
             keyword: 搜索关键词（股票代码或名称）
             limit: 返回数量限制
 
         Returns:
-            搜索结果列表
+            搜索结果列表（去重后按相关度排序）
         """
         try:
             # 1. 检查Redis缓存
@@ -365,61 +365,98 @@ class BacktestStockDataService:
                 logger.debug(f"从缓存获取搜索结果: {keyword}")
                 return json.loads(cached)
 
-            # 2. 构建查询条件
-            query = {}
+            # 2. 并发查询两个表
+            from asyncio import gather
+
             if keyword.isdigit():
+                # 数字：按股票代码搜索
                 code_6 = str(keyword).zfill(6)
-                query["stock_code"] = {"$regex": f"^{code_6}"}
+                # stock_info 查询
+                query1 = {"stock_code": {"$regex": f"^{code_6}"}}
+                cursor1 = self.stock_info_collection.find(query1, {"_id": 0}).limit(limit)
+                task1 = cursor1.to_list(length=limit)
+                # stock_basic_info 查询
+                query2 = {"$or": [{"symbol": {"$regex": f"^{code_6}"}}, {"code": {"$regex": f"^{code_6}"}}]}
+                cursor2 = self.stock_basic_info_collection.find(query2, {"_id": 0}).limit(limit)
+                task2 = cursor2.to_list(length=limit)
             else:
-                query["stock_name"] = {"$regex": keyword, "$options": "i"}
+                # 文字：按股票名称搜索
+                query1 = {"stock_name": {"$regex": keyword, "$options": "i"}}
+                cursor1 = self.stock_info_collection.find(query1, {"_id": 0}).limit(limit)
+                task1 = cursor1.to_list(length=limit)
+                query2 = {"name": {"$regex": keyword, "$options": "i"}}
+                cursor2 = self.stock_basic_info_collection.find(query2, {"_id": 0}).limit(limit)
+                task2 = cursor2.to_list(length=limit)
 
-            # 3. 查询 stock_info 集合
-            cursor = self.stock_info_collection.find(query, {"_id": 0}).limit(limit)
-            stocks = await cursor.to_list(length=limit)
+            # 并发执行查询
+            results = await gather(task1, task2)
+            stock_info_results = results[0]  # stock_info 结果
+            basic_info_results = results[1]   # stock_basic_info 结果
 
-            # 4. 如果 stock_info 没有结果，从 stock_basic_info 搜索
-            if not stocks:
-                logger.info(f"stock_info 中未找到 {keyword}，尝试从 stock_basic_info 搜索")
-                query = {}
-                if keyword.isdigit():
-                    code_6 = str(keyword).zfill(6)
-                    query["$or"] = [{"symbol": {"$regex": f"^{code_6}"}}, {"code": {"$regex": f"^{code_6}"}}]
-                else:
-                    query["name"] = {"$regex": keyword, "$options": "i"}
+            # 调试日志：记录查询结果
+            logger.info(f"[搜索调试] keyword={keyword}, stock_info找到{len(stock_info_results)}条, "
+                       f"stock_basic_info找到{len(basic_info_results)}条")
+            if basic_info_results:
+                logger.debug(f"[搜索调试] stock_basic_info样本: {basic_info_results[0]}")
 
-                cursor = self.stock_basic_info_collection.find(query, {"_id": 0}).limit(limit)
-                basic_stocks = await cursor.to_list(length=limit)
+            # 3. 合并结果（stock_basic_info 优先）
+            seen_codes = set()
+            merged_stocks = []
 
-                stocks = []
-                for bs in basic_stocks:
-                    stock_info = self._map_to_stock_info(bs)
-                    stocks.append(stock_info)
+            # 先处理 stock_basic_info 结果（优先保留）
+            for basic_stock in basic_info_results:
+                # 映射到统一格式
+                mapped = self._map_to_stock_info(basic_stock)
+                stock_code = mapped["stock_code"]
 
-                    # 异步保存（改进1：标记已映射）
-                    await self.stock_info_collection.update_one(
-                        {"stock_code": stock_info["stock_code"]},
-                        {"$set": stock_info},
-                        upsert=True
-                    )
+                if stock_code not in seen_codes:
+                    seen_codes.add(stock_code)
+                    merged_stocks.append({
+                        "stock_code": stock_code,
+                        "stock_name": mapped["stock_name"],
+                        "market": mapped["market"],
+                        "industry": mapped.get("industry"),
+                        "_source": "stock_basic_info"  # 添加来源标记
+                    })
 
-            # 5. 转换为搜索结果格式
-            results = []
-            for stock in stocks:
-                results.append({
-                    "stock_code": stock["stock_code"],
-                    "stock_name": stock["stock_name"],
-                    "market": stock["market"],
-                    "industry": stock.get("industry")
-                })
+                    # 异步保存到 stock_info（后台操作，不阻塞返回）
+                    try:
+                        await self.stock_info_collection.update_one(
+                            {"stock_code": stock_code},
+                            {"$set": mapped},
+                            upsert=True
+                        )
+                    except Exception as e:
+                        logger.warning(f"保存股票信息到 stock_info 失败: {stock_code}, {e}")
 
-            # 6. 写入Redis缓存
+            # 再处理 stock_info 结果（只添加未出现过的）
+            for stock in stock_info_results:
+                stock_code = stock["stock_code"]
+                # 去重：只添加 stock_basic_info 中没有的股票
+                if stock_code not in seen_codes:
+                    seen_codes.add(stock_code)
+                    merged_stocks.append({
+                        "stock_code": stock["stock_code"],
+                        "stock_name": stock["stock_name"],
+                        "market": stock["market"],
+                        "industry": stock.get("industry"),
+                        "_source": "stock_info"  # 添加来源标记
+                    })
+
+            # 4. 限制返回数量
+            final_results = merged_stocks[:limit]
+
+            # 5. 写入Redis缓存
             await self.redis.setex(
                 cache_key,
                 BacktestStockCacheKeys.TTL_SEARCH,
-                json.dumps(results, default=str)
+                json.dumps(final_results, default=str)
             )
 
-            return results
+            logger.info(f"搜索股票完成: keyword={keyword}, stock_info结果={len(stock_info_results)}, "
+                       f"stock_basic_info结果={len(basic_info_results)}, 合并后={len(final_results)}")
+
+            return final_results
 
         except Exception as e:
             logger.error(f"搜索股票失败 keyword={keyword}: {e}", exc_info=True)
@@ -596,18 +633,32 @@ class BacktestStockDataService:
     def _map_to_stock_info(self, basic_info: Dict[str, Any]) -> Dict[str, Any]:
         """将 stock_basic_info 格式映射到 stock_info 格式"""
         symbol = basic_info.get("symbol") or basic_info.get("code", "")
-        code_6 = str(symbol).zfill(6)
+
+        # 检查是否已经是完整代码（包含后缀），如 600519.SH 或 600519.SS
+        if '.' in str(symbol):
+            # 已经是完整代码，直接使用
+            full_code = str(symbol)
+            code_6 = full_code.split('.')[0]
+            code_6 = code_6.zfill(6)
+        else:
+            # 只有6位代码，需要添加后缀
+            code_6 = str(symbol).zfill(6)
+            # 使用 .SH 作为上海市场后缀（与 stock_basic_info 表一致）
+            if code_6.startswith(('60', '68', '90')):
+                full_code = f"{code_6}.SH"
+            elif code_6.startswith(('00', '30', '20')):
+                full_code = f"{code_6}.SZ"
+            else:
+                full_code = f"{code_6}.SZ"
 
         # 判断市场
-        if code_6.startswith(('60', '68', '90')):
+        if full_code.endswith(('.SH', '.SS')):
             market = "上海"
-            full_code = f"{code_6}.SS"
-        elif code_6.startswith(('00', '30', '20')):
+        elif full_code.endswith('.SZ'):
             market = "深圳"
-            full_code = f"{code_6}.SZ"
         else:
+            # 默认深圳
             market = "深圳"
-            full_code = f"{code_6}.SZ"
 
         # 处理上市日期
         list_date = basic_info.get("list_date")
@@ -657,7 +708,7 @@ class BacktestStockDataService:
     def _get_full_stock_code(self, code_6: str) -> str:
         """获取完整的股票代码"""
         if code_6.startswith(('60', '68', '90')):
-            return f"{code_6}.SS"
+            return f"{code_6}.SH"  # 统一使用 .SH 后缀
         else:
             return f"{code_6}.SZ"
 

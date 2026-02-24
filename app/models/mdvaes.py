@@ -7,6 +7,20 @@ from datetime import datetime
 
 # ===== 请求模型 =====
 
+class AnchorWeightModel(BaseModel):
+    """多锚点权重配置"""
+    peg: float = Field(default=0.4, ge=0.0, le=1.0, description="PEG估值权重")
+    pe_historical: float = Field(default=0.3, ge=0.0, le=1.0, description="历史PE估值权重")
+    pb: float = Field(default=0.15, ge=0.0, le=1.0, description="PB估值权重")
+    dcf: float = Field(default=0.15, ge=0.0, le=1.0, description="DCF估值权重")
+
+    def validate_total_weight(self):
+        """验证权重总和是否为1"""
+        total = self.peg + self.pe_historical + self.pb + self.dcf
+        if abs(total - 1.0) > 0.01:
+            raise ValueError(f"权重总和必须为1.0，当前为{total:.2f}")
+
+
 class MDVAESCalculateRequest(BaseModel):
     """MDVAES 估值计算请求"""
     symbol: str = Field(..., description="股票代码")
@@ -17,6 +31,7 @@ class MDVAESCalculateRequest(BaseModel):
     use_margin: bool = Field(default=True, description="使用安全边际")
     margin_buy: float = Field(default=0.8, ge=0.5, le=0.95, description="买入安全边际")
     margin_sell: float = Field(default=1.2, ge=1.05, le=2.0, description="卖出安全边际")
+    anchor_weight: Optional[AnchorWeightModel] = Field(None, description="多锚点权重配置（不传则使用默认值）")
 
 
 class MDVAESParamsUpdateRequest(BaseModel):
@@ -27,6 +42,7 @@ class MDVAESParamsUpdateRequest(BaseModel):
     use_margin: Optional[bool] = Field(None, description="使用安全边际")
     margin_buy: Optional[float] = Field(None, ge=0.5, le=0.95, description="买入安全边际")
     margin_sell: Optional[float] = Field(None, ge=1.05, le=2.0, description="卖出安全边际")
+    anchor_weight: Optional[AnchorWeightModel] = Field(None, description="多锚点权重配置（不传则使用默认值）")
 
 
 # ===== 响应模型 =====
@@ -88,6 +104,10 @@ class MDVAESParametersResponse(BaseModel):
     use_margin: bool
     margin_buy: float
     margin_sell: float
+    anchor_weight: AnchorWeightModel = Field(
+        default_factory=lambda: AnchorWeightModel(),
+        description="多锚点权重配置"
+    )
 
 
 class CacheStatusResponse(BaseModel):

@@ -33,7 +33,7 @@ from app.domain.mdvaes import (
 )
 from app.services.mdvaes_data_reader import MDVAESDataReader
 from app.services.growth_calculator import GrowthCalculator
-# from app.services.valuation_calculator import ValuationCalculator  # 估值计算内联在函数中
+from app.services.valuation_calculator import ValuationCalculator
 
 
 def print_section(title: str):
@@ -182,7 +182,11 @@ def run_single_backtest(
     peg_base: float,
     risk_adjustment: float,
     margin_buy: float,
-    margin_sell: float
+    margin_sell: float,
+    peg_weight: float = None,
+    pe_weight: float = None,
+    pb_weight: float = None,
+    dcf_weight: float = None
 ):
     """运行单次MDVAES估值回测"""
 
@@ -194,6 +198,34 @@ def run_single_backtest(
     print(f"风险调整幅度: {risk_adjustment}")
     print(f"买入安全边际: {margin_buy} (价格低于估值的{margin_buy*100}%)")
     print(f"卖出安全边际: {margin_sell} (价格高于估值的{margin_sell*100}%)")
+
+    # 处理权重参数
+    if peg_weight is not None or pe_weight is not None or pb_weight is not None or dcf_weight is not None:
+        # 用户传入了权重参数
+        peg_weight = peg_weight if peg_weight is not None else 0.4
+        pe_weight = pe_weight if pe_weight is not None else 0.3
+        pb_weight = pb_weight if pb_weight is not None else 0.15
+        dcf_weight = dcf_weight if dcf_weight is not None else 0.15
+
+        # 验证权重总和
+        total_weight = peg_weight + pe_weight + pb_weight + dcf_weight
+        if abs(total_weight - 1.0) > 0.001:
+            print(f"\n⚠️ 警告: 权重总和为 {total_weight:.3f}，不等于 1.0，将自动归一化处理")
+            # 归一化处理
+            peg_weight = peg_weight / total_weight
+            pe_weight = pe_weight / total_weight
+            pb_weight = pb_weight / total_weight
+            dcf_weight = dcf_weight / total_weight
+            print(f"   归一化后权重: PEG={peg_weight:.3f}, PE={pe_weight:.3f}, PB={pb_weight:.3f}, DCF={dcf_weight:.3f}")
+
+        custom_anchor_weight = {
+            "peg": peg_weight,
+            "pe_historical": pe_weight,
+            "pb": pb_weight,
+            "dcf": dcf_weight
+        }
+    else:
+        custom_anchor_weight = None
 
     # 初始化服务
     data_reader = MDVAESDataReader()
@@ -270,58 +302,9 @@ def run_single_backtest(
     # ==================== 步骤5: 构建风险指标 ====================
     print_section("步骤5: 构建风险指标")
 
-    # 尝试从数据库获取真实财务比率（使用同步查询）
-    try:
-        calculation_date_yyyymmdd = calculation_date.replace("-", "")
-        ratios_data = db.mdvaes_financial_ratios.find_one({
-            "ts_code": symbol,
-            "ann_date": {"$lt": calculation_date_yyyymmdd}
-        }, sort=[("ann_date", -1)])
-
-        if ratios_data:
-            ratios = {
-                "debt_to_assets": ratios_data.get("debt_to_assets"),
-                "current_ratio": ratios_data.get("current_ratio"),
-                "quick_ratio": ratios_data.get("quick_ratio"),
-                "roe": ratios_data.get("roe"),
-                "roa": ratios_data.get("roa")
-            }
-            print(f"\n✅ 使用真实财务数据:")
-            # 数据库中的百分比数值直接显示即可（如14.14表示14.14%）
-            print(f"   资产负债率: {ratios.get('debt_to_assets', 50):.2f}%")
-            print(f"   流动比率: {ratios.get('current_ratio', 1.5):.2f}")
-            print(f"   速动比率: {ratios.get('quick_ratio', 1.2):.2f}")
-            print(f"   ROE: {ratios.get('roe', 10):.2f}%")
-            print(f"   ROA: {ratios.get('roa', 5):.2f}%")
-
-            # 根据财务数据评估风险等级（将百分比转换为小数）
-            debt_ratio_pct = ratios.get('debt_to_assets', 50)
-            debt_ratio = debt_ratio_pct / 100.0  # 转换为小数（14.14 → 0.1414）
-            if debt_ratio < 0.3:
-                risk_level = RiskLevel.LOW
-            elif debt_ratio < 0.6:
-                risk_level = RiskLevel.MEDIUM
-            else:
-                risk_level = RiskLevel.HIGH
-            print(f"   风险等级评估: {risk_level.value} (资产负债率 {debt_ratio_pct:.2f}%)")
-
-            risk_metrics = RiskMetrics(
-                debt_to_assets=debt_ratio,  # 使用转换后的小数
-                current_ratio=ratios.get('current_ratio', 1.5),
-                quick_ratio=ratios.get('quick_ratio', 1.2),
-                cashflow_to_income=1.1,
-                risk_level=risk_level
-            )
-        else:
-            raise ValueError("无财务数据")
-
-    except Exception as e:
-        print(f"\n⚠️ 未获取到真实财务数据，使用默认值")
-        print(f"   资产负债率: 50%")
-        print(f"   流动比率: 1.5")
-        print(f"   速动比率: 1.2")
-        print(f"   风险等级: MEDIUM")
-
+    # 验证日期格式
+    if not calculation_date:
+        print(f"\n⚠️ 计算日期为空，使用默认风险指标")
         risk_metrics = RiskMetrics(
             debt_to_assets=0.5,
             current_ratio=1.5,
@@ -329,6 +312,107 @@ def run_single_backtest(
             cashflow_to_income=1.1,
             risk_level=RiskLevel.MEDIUM
         )
+    else:
+        # 尝试从数据库获取真实财务比率（使用同步查询）
+        try:
+            calculation_date_yyyymmdd = calculation_date.replace("-", "")
+
+            # 先检查集合中是否有该股票的任何财务数据
+            print(f"    🔍 正在从数据库查询财务比率...")
+            print(f"    📋 MongoDB 请求参数:")
+            print(f"       - 计算日期: {calculation_date} (YYYY-MM-DD)")
+            print(f"       - 查询截止日期: < {calculation_date_yyyymmdd} (YYYYMMDD)")
+            print(f"       - 查询股票代码: {symbol}")
+
+            # 检查集合中是否有该股票的数据
+            total_count = db.mdvaes_financial_ratios.count_documents({"ts_code": symbol})
+            print(f"       - 数据库中该股票的总记录数: {total_count}")
+
+            ratios_data = db.mdvaes_financial_ratios.find_one({
+                "ts_code": symbol,
+                "ann_date": {"$lt": calculation_date_yyyymmdd}
+            }, sort=[("ann_date", -1)])
+
+            print(f"       - 查询返回结果: {'找到' if ratios_data else '未找到'}")
+
+            if ratios_data:
+                ratios = {
+                    "debt_to_assets": ratios_data.get("debt_to_assets"),
+                    "current_ratio": ratios_data.get("current_ratio"),
+                    "quick_ratio": ratios_data.get("quick_ratio"),
+                    "roe": ratios_data.get("roe"),
+                    "roa": ratios_data.get("roa")
+                }
+                print(f"\n✅ 使用真实财务数据:")
+                ann_date_val = ratios_data.get('ann_date')
+                print(f"   公告日期: {ann_date_val if ann_date_val else 'N/A'}")
+                # 数据库中的百分比数值直接显示即可（如14.14表示14.14%）
+                debt_val = ratios.get('debt_to_assets')
+                current_val = ratios.get('current_ratio')
+                quick_val = ratios.get('quick_ratio')
+                roe_val = ratios.get('roe')
+                roa_val = ratios.get('roa')
+                print(f"   资产负债率: {debt_val if debt_val is not None else 50:.2f}%")
+                print(f"   流动比率: {current_val if current_val is not None else 1.5:.2f}")
+                print(f"   速动比率: {quick_val if quick_val is not None else 1.2:.2f}")
+                print(f"   ROE: {roe_val if roe_val is not None else 10:.2f}%")
+                print(f"   ROA: {roa_val if roa_val is not None else 5:.2f}%")
+
+                # 根据财务数据评估风险等级（将百分比转换为小数）
+                debt_ratio_pct = debt_val if debt_val is not None else 50
+                debt_ratio = debt_ratio_pct / 100.0  # 转换为小数（14.14 → 0.1414）
+                if debt_ratio < 0.3:
+                    risk_level = RiskLevel.LOW
+                elif debt_ratio < 0.6:
+                    risk_level = RiskLevel.MEDIUM
+                else:
+                    risk_level = RiskLevel.HIGH
+                print(f"   风险等级评估: {risk_level.value} (资产负债率 {debt_ratio_pct:.2f}%)")
+
+                risk_metrics = RiskMetrics(
+                    debt_to_assets=debt_ratio,  # 使用转换后的小数
+                    current_ratio=current_val if current_val is not None else 1.5,
+                    quick_ratio=quick_val if quick_val is not None else 1.2,
+                    cashflow_to_income=1.1,
+                    risk_level=risk_level
+                )
+            else:
+                # 提供更详细的诊断信息
+                print(f"\n    ⚠️ 数据库中未找到符合条件的财务数据")
+                if total_count > 0:
+                    # 有该股票的数据，但不符合日期条件
+                    latest = db.mdvaes_financial_ratios.find_one(
+                        {"ts_code": symbol},
+                        sort=[("ann_date", -1)]
+                    )
+                    if latest:
+                        latest_ann_date = latest.get('ann_date')
+                        print(f"       - 该股票最新财务数据公告日期: {latest_ann_date if latest_ann_date else 'N/A'}")
+                        print(f"       - 计算日期: {calculation_date_yyyymmdd}")
+                        print(f"       - 差异: 最新公告日期不早于计算日期")
+                else:
+                    print(f"       - 数据库中完全没有该股票的财务数据")
+                    print(f"       - 💡 提示：请先运行批量同步财务数据")
+                    print(f"          python -m app.worker.mdvaes_batch_sync --start-date 2020-01-01 --end-date 2024-12-31 --tables financial_ratios")
+                raise ValueError("无财务数据")
+
+        except Exception as e:
+            import traceback
+            print(f"\n⚠️ 未获取到真实财务数据，使用默认值")
+            print(f"   错误原因: {e}")
+            print(f"   详细堆栈:\n{traceback.format_exc()}")
+            print(f"   资产负债率: 50%")
+            print(f"   流动比率: 1.5")
+            print(f"   速动比率: 1.2")
+            print(f"   风险等级: MEDIUM")
+
+            risk_metrics = RiskMetrics(
+                debt_to_assets=0.5,
+                current_ratio=1.5,
+                quick_ratio=1.2,
+                cashflow_to_income=1.1,
+                risk_level=RiskLevel.MEDIUM
+            )
 
     # ==================== 步骤5.5: 获取每股自由现金流 ====================
     print_section("步骤5.5: 获取每股自由现金流 (FCFPS)")
@@ -350,15 +434,29 @@ def run_single_backtest(
     # ==================== 步骤6: 构建MDVAES参数 ====================
     print_section("步骤6: 构建MDVAES参数")
 
-    params = MDVAESParams(
-        forecast_years=forecast_years,
-        peg_base=peg_base,
-        risk_adjustment=risk_adjustment,
-        signal_mode="safety_margin",
-        safety_margin_buy=margin_buy,
-        safety_margin_sell=margin_sell
-    )
+    # 构建参数，如果用户传入了权重则使用自定义权重
+    params_kwargs = {
+        "forecast_years": forecast_years,
+        "peg_base": peg_base,
+        "risk_adjustment": risk_adjustment,
+        "signal_mode": "safety_margin",
+        "safety_margin_buy": margin_buy,
+        "safety_margin_sell": margin_sell
+    }
+
+    if custom_anchor_weight is not None:
+        params_kwargs["anchor_weight"] = custom_anchor_weight
+        print(f"\n📋 使用自定义权重配置:")
+        print(f"   PEG权重: {custom_anchor_weight['peg']:.2%}")
+        print(f"   PE权重: {custom_anchor_weight['pe_historical']:.2%}")
+        print(f"   PB权重: {custom_anchor_weight['pb']:.2%}")
+        print(f"   DCF权重: {custom_anchor_weight['dcf']:.2%}")
+
+    params = MDVAESParams(**params_kwargs)
     params.validate()
+
+    if custom_anchor_weight is None:
+        print(f"\n使用默认权重配置:")
 
     print(f"\n预测年数: {params.forecast_years}")
     print(f"PEG基数: {params.peg_base}")
@@ -400,7 +498,7 @@ def run_single_backtest(
     print(f"     = {current_eps:.4f} × 1.5")
     print(f"     = {pb_valuation:.2f} 元")
 
-    # 7.4 DCF估值
+    # 7.4 DCF估值 (使用 ValuationCalculator)
     print_subsection("7.4 DCF估值")
 
     # 根据是否有 FCFPS 决定计算方式
@@ -408,17 +506,29 @@ def run_single_backtest(
         print(f"🎯 使用每股自由现金流 (FCFPS) 进行 DCF 估值")
         dcf_base = current_fcfps
         dcf_base_name = "FCFPS"
+        # 使用 ValuationCalculator 的 FCFPS DCF 方法
+        dcf_valuation = ValuationCalculator._calc_dcf_valuation_fcfps(
+            fcfps=current_fcfps,
+            growth_rate=growth_metrics.growth_rate,
+            discount_rate=bond_rate,
+            params=params
+        )
     else:
         print(f"⚠️ 无 FCFPS 数据，使用每股收益 (EPS) 进行 DCF 估值")
         dcf_base = current_eps
         dcf_base_name = "EPS"
+        # 使用 ValuationCalculator 的 EPS DCF 方法
+        dcf_valuation = ValuationCalculator._calc_dcf_valuation(
+            eps=current_eps,
+            growth_rate=growth_metrics.growth_rate,
+            discount_rate=bond_rate,
+            params=params
+        )
 
+    # 打印详细计算过程（与 ValuationCalculator 保持一致）
     terminal_growth = 0.03
     required_return = bond_rate + 0.05
-    if growth_metrics.growth_rate >= required_return:
-        adj_growth_rate = required_return - 0.01
-    else:
-        adj_growth_rate = growth_metrics.growth_rate
+    adj_growth_rate = min(growth_metrics.growth_rate, required_return - 0.01)
 
     print(f"终值增长率: {terminal_growth:.2%}")
     print(f"必要回报率: 无风险利率({bond_rate:.2%}) + 5% = {required_return:.2%}")
@@ -443,8 +553,8 @@ def run_single_backtest(
     discounted_terminal = terminal_value / ((1 + required_return) ** forecast_years)
     print(f"终值      -              -              {discounted_terminal:<15.4f}")
 
-    dcf_valuation = sum(forecast_values) + discounted_terminal
     print(f"\nDCF估值 = Σ折现值 + 折现终值 = {dcf_valuation:.2f} 元")
+    print(f"         (使用 ValuationCalculator 计算结果)")
 
     # 7.5 多锚点加权
     print_subsection("7.5 多锚点加权估值")
@@ -586,9 +696,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
+    # 基本用法（使用默认权重）
     python scripts/test_mdvaes_single_backtest.py 600941.SS 2024-01-02
     python scripts/test_mdvaes_single_backtest.py 000001.SZ 2024-06-15 --forecast-years 3 --peg-base 0.8
+
+    # 自定义安全边际
     python scripts/test_mdvaes_single_backtest.py 600519.SH 2024-01-02 --margin-buy 0.7 --margin-sell 1.3
+
+    # 自定义多锚点权重（必须同时指定四个权重，总和为1.0）
+    python scripts/test_mdvaes_single_backtest.py 000001.SZ 2024-06-15 --peg-weight 0.5 --pe-weight 0.2 --pb-weight 0.15 --dcf-weight 0.15
+    python scripts/test_mdvaes_single_backtest.py 600519.SH 2024-01-02 --peg-weight 0.3 --pe-weight 0.3 --pb-weight 0.2 --dcf-weight 0.2 --margin-buy 0.75
+
+    # 默认权重配置: PEG=40%%, PE=30%%, PB=15%%, DCF=15%%
         """
     )
 
@@ -604,6 +723,16 @@ def main():
                         help="买入安全边际 (默认: 0.8, 即价格低于估值80%%时买入)")
     parser.add_argument("--margin-sell", type=float, default=1.2,
                         help="卖出安全边际 (默认: 1.2, 即价格高于估值120%%时卖出)")
+
+    # 多锚点权重参数
+    parser.add_argument("--peg-weight", type=float, default=None,
+                        help="PEG估值权重 (默认: 0.4，与 --pe-weight --pb-weight --dcf-weight 之和必须为1.0)")
+    parser.add_argument("--pe-weight", type=float, default=None,
+                        help="PE估值权重 (默认: 0.3，与 --peg-weight --pb-weight --dcf-weight 之和必须为1.0)")
+    parser.add_argument("--pb-weight", type=float, default=None,
+                        help="PB估值权重 (默认: 0.15，与 --peg-weight --pe-weight --dcf-weight 之和必须为1.0)")
+    parser.add_argument("--dcf-weight", type=float, default=None,
+                        help="DCF估值权重 (默认: 0.15，与 --peg-weight --pe-weight --pb-weight 之和必须为1.0)")
 
     args = parser.parse_args()
 
@@ -635,6 +764,29 @@ def main():
         print("❌ 卖出安全边际必须在 1.05-2.0 之间")
         return 1
 
+    # 验证权重参数（如果提供了的话）
+    weight_args = [args.peg_weight, args.pe_weight, args.pb_weight, args.dcf_weight]
+    if any(w is not None for w in weight_args):
+        # 至少有一个权重参数被传入
+        # 检查是否所有权重参数都传入了（不允许部分传入）
+        if not all(w is not None for w in weight_args):
+            print("❌ 权重参数必须全部指定或全部不指定")
+            print("   请同时提供 --peg-weight, --pe-weight, --pb-weight, --dcf-weight")
+            return 1
+
+        # 检查权重范围
+        for name, value in [("PEG", args.peg_weight), ("PE", args.pe_weight),
+                            ("PB", args.pb_weight), ("DCF", args.dcf_weight)]:
+            if value < 0 or value > 1:
+                print(f"❌ {name}权重必须在 0.0-1.0 之间")
+                return 1
+
+        # 检查权重总和
+        total_weight = args.peg_weight + args.pe_weight + args.pb_weight + args.dcf_weight
+        if abs(total_weight - 1.0) > 0.01:
+            print(f"⚠️ 警告: 权重总和为 {total_weight:.3f}，不等于 1.0")
+            print(f"   将自动归一化处理")
+
     # 运行回测
     try:
         run_single_backtest(
@@ -644,7 +796,11 @@ def main():
             peg_base=args.peg_base,
             risk_adjustment=args.risk_adjustment,
             margin_buy=args.margin_buy,
-            margin_sell=args.margin_sell
+            margin_sell=args.margin_sell,
+            peg_weight=args.peg_weight,
+            pe_weight=args.pe_weight,
+            pb_weight=args.pb_weight,
+            dcf_weight=args.dcf_weight
         )
         return 0
 

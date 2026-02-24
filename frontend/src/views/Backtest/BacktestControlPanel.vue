@@ -264,9 +264,103 @@
 
                 <el-divider />
 
+                <!-- 多锚点权重配置（仅 MDVAES 策略显示） -->
+                <div v-if="selectedStrategy?.hasAnchorWeight" class="anchor-weight-config">
+                  <h4>多锚点权重配置</h4>
+                  <div class="weight-tip">
+                    <el-icon><InfoFilled /></el-icon>
+                    四个估值方法的权重总和必须等于 1.0（100%）
+                  </div>
+                  <el-form label-width="100px" class="weight-form">
+                    <el-row :gutter="12">
+                      <el-col :span="12">
+                        <el-form-item label="PEG权重">
+                          <el-input-number
+                            v-model="form.anchor_weight.peg"
+                            :min="0"
+                            :max="1"
+                            :step="0.05"
+                            :precision="3"
+                            controls-position="right"
+                            style="width: 100%"
+                            @change="validateAnchorWeight"
+                          />
+                        </el-form-item>
+                      </el-col>
+                      <el-col :span="12">
+                        <el-form-item label="PE权重">
+                          <el-input-number
+                            v-model="form.anchor_weight.pe_historical"
+                            :min="0"
+                            :max="1"
+                            :step="0.05"
+                            :precision="3"
+                            controls-position="right"
+                            style="width: 100%"
+                            @change="validateAnchorWeight"
+                          />
+                        </el-form-item>
+                      </el-col>
+                    </el-row>
+                    <el-row :gutter="12">
+                      <el-col :span="12">
+                        <el-form-item label="PB权重">
+                          <el-input-number
+                            v-model="form.anchor_weight.pb"
+                            :min="0"
+                            :max="1"
+                            :step="0.05"
+                            :precision="3"
+                            controls-position="right"
+                            style="width: 100%"
+                            @change="validateAnchorWeight"
+                          />
+                        </el-form-item>
+                      </el-col>
+                      <el-col :span="12">
+                        <el-form-item label="DCF权重">
+                          <el-input-number
+                            v-model="form.anchor_weight.dcf"
+                            :min="0"
+                            :max="1"
+                            :step="0.05"
+                            :precision="3"
+                            controls-position="right"
+                            style="width: 100%"
+                            @change="validateAnchorWeight"
+                          />
+                        </el-form-item>
+                      </el-col>
+                    </el-row>
+                    <el-row>
+                      <el-col :span="24">
+                        <div class="weight-total" :class="{ 'weight-invalid': !isAnchorWeightValid }">
+                          权重总和: {{ anchorWeightTotal.toFixed(3) }}
+                          <el-tag v-if="isAnchorWeightValid" type="success" size="small" style="margin-left: 8px">
+                            有效
+                          </el-tag>
+                          <el-tag v-else type="danger" size="small" style="margin-left: 8px">
+                            总和必须为 1.0
+                          </el-tag>
+                        </div>
+                      </el-col>
+                    </el-row>
+                  </el-form>
+                  <el-button
+                    size="small"
+                    text
+                    @click="resetAnchorWeight"
+                    style="margin-top: 8px;"
+                  >
+                    <el-icon><RefreshLeft /></el-icon>
+                    重置为默认权重
+                  </el-button>
+                </div>
+
                 <!-- 策略参数设置 -->
                 <div v-if="selectedStrategy.parameters && selectedStrategy.parameters.length > 0">
-                  <h4>策略参数设置</h4>
+                  <h4 v-if="!selectedStrategy?.hasAnchorWeight">策略参数设置</h4>
+                  <h4 v-else>其他策略参数</h4>
                   <el-form label-width="120px">
                     <el-form-item
                       v-for="param in selectedStrategy.parameters"
@@ -303,7 +397,7 @@
                     </el-form-item>
                   </el-form>
                 </div>
-                <div v-else class="no-params">
+                <div v-else-if="!selectedStrategy?.hasAnchorWeight" class="no-params">
                   该策略无可配置参数
                 </div>
               </div>
@@ -675,7 +769,14 @@ const form = ref({
   initial_capital: 100000,
   min_purchase: 100,
   strategy_id: '',
-  strategy_params: {}
+  strategy_params: {},
+  // 多锚点权重配置（用于 MDVAES 策略）
+  anchor_weight: {
+    peg: 0.4,
+    pe_historical: 0.3,
+    pb: 0.15,
+    dcf: 0.15
+  }
 })
 
 // 表单验证规则
@@ -730,6 +831,7 @@ const strategies = ref([
     description: '基于多锚点估值系统(MDVAES)进行价值投资决策，通过分析师盈利预测和多锚点估值计算内在价值',
     is_builtin: true,
     category: 'valuation',
+    hasAnchorWeight: true,  // 标识该策略需要配置多锚点权重
     parameters: [
       { name: 'symbol', label: '股票代码', type: 'string', default: '000001.SZ' },
       { name: 'forecast_years', label: 'EPS预测年数', type: 'number', min: 1, max: 10, step: 1, default: 5, precision: 0 },
@@ -739,7 +841,14 @@ const strategies = ref([
       { name: 'use_margin', label: '使用安全边际', type: 'boolean', default: true },
       { name: 'margin_buy', label: '买入安全边际', type: 'number', min: 0.5, max: 0.95, step: 0.05, default: 0.8, precision: 3 },
       { name: 'margin_sell', label: '卖出安全边际', type: 'number', min: 1.05, max: 2.0, step: 0.05, default: 1.2, precision: 3 }
-    ]
+    ],
+    // 多锚点权重默认配置
+    anchorWeightDefaults: {
+      peg: 0.4,
+      pe_historical: 0.3,
+      pb: 0.15,
+      dcf: 0.15
+    }
   }
 ])
 
@@ -764,13 +873,20 @@ const paramsConfirmed = ref(false)
 
 // 计算属性
 const canStartBacktest = computed(() => {
-  return form.value.stock_code &&
+  const basicValid = form.value.stock_code &&
          form.value.start_date &&
          form.value.end_date &&
          form.value.initial_capital >= 1000 &&
          form.value.min_purchase >= 100 &&
          form.value.min_purchase % 100 === 0 &&
          form.value.strategy_id
+
+  // 如果是 MDVAES 策略，需要额外验证权重总和
+  if (basicValid && form.value.strategy_id === 'mdvaes') {
+    return isAnchorWeightValid.value
+  }
+
+  return basicValid
 })
 
 const canSaveParams = computed(() => {
@@ -836,6 +952,16 @@ const currentDate = computed(() => {
   return new Date().toLocaleDateString('zh-CN')
 })
 
+// 多锚点权重相关计算属性
+const anchorWeightTotal = computed(() => {
+  const w = form.value.anchor_weight
+  return (w.peg || 0) + (w.pe_historical || 0) + (w.pb || 0) + (w.dcf || 0)
+})
+
+const isAnchorWeightValid = computed(() => {
+  return Math.abs(anchorWeightTotal.value - 1.0) < 0.001
+})
+
 // 方法
 /**
  * 处理交易日数量变化
@@ -875,8 +1001,25 @@ async function handleStartBacktest() {
 
 async function confirmStartBacktest() {
   showParamsConfirmDialog.value = false
+
+  // 如果是 MDVAES 策略，将 anchor_weight 添加到 strategy_params 中
+  const requestParams = { ...form.value }
+  if (requestParams.strategy_id === 'mdvaes') {
+    // 验证权重总和
+    if (!isAnchorWeightValid.value) {
+      ElMessage.error(`权重总和必须为 1.0，当前为 ${anchorWeightTotal.value.toFixed(3)}`)
+      showParamsConfirmDialog.value = true
+      return
+    }
+    // 将权重配置添加到策略参数中
+    requestParams.strategy_params = {
+      ...requestParams.strategy_params,
+      anchor_weight: { ...requestParams.anchor_weight }
+    }
+  }
+
   try {
-    await backtestStore.startBacktest(form.value)
+    await backtestStore.startBacktest(requestParams)
     ElMessage.success('回测任务已启动')
     localStorage.setItem('backtest_guide_shown', 'true')
   } catch (error: any) {
@@ -939,11 +1082,39 @@ function handleResetParams() {
     initial_capital: 100000,
     min_purchase: 100,
     strategy_id: '',
-    strategy_params: {}
+    strategy_params: {},
+    // 重置权重为默认值
+    anchor_weight: {
+      peg: 0.4,
+      pe_historical: 0.3,
+      pb: 0.15,
+      dcf: 0.15
+    }
   }
   strategyConfirmed.value = false  // 重置策略确认状态
   paramsConfirmed.value = false  // 重置参数确认状态
   ElMessage.success('参数已重置')
+}
+
+/**
+ * 验证多锚点权重总和是否为 1.0
+ */
+function validateAnchorWeight() {
+  const total = anchorWeightTotal.value
+  if (Math.abs(total - 1.0) >= 0.001) {
+    ElMessage.warning(`权重总和为 ${total.toFixed(3)}，必须等于 1.0`)
+  }
+}
+
+/**
+ * 重置多锚点权重为默认值
+ */
+function resetAnchorWeight() {
+  const strategy = strategies.value.find(s => s.id === form.value.strategy_id)
+  if (strategy?.anchorWeightDefaults) {
+    form.value.anchor_weight = { ...strategy.anchorWeightDefaults }
+    ElMessage.success('权重已重置为默认值')
+  }
 }
 
 async function handleLoadSavedParams(command: string | number) {
@@ -1056,6 +1227,20 @@ function handleKeydown(event: KeyboardEvent) {
 watch(() => form.value.strategy_id, (newStrategyId, oldStrategyId) => {
   if (newStrategyId && newStrategyId !== oldStrategyId) {
     const strategy = strategies.value.find(s => s.id === newStrategyId)
+
+    // 初始化多锚点权重（如果是 MDVAES 策略）
+    if (strategy?.hasAnchorWeight && strategy?.anchorWeightDefaults) {
+      form.value.anchor_weight = { ...strategy.anchorWeightDefaults }
+    } else {
+      // 非权重策略，重置为默认值
+      form.value.anchor_weight = {
+        peg: 0.4,
+        pe_historical: 0.3,
+        pb: 0.15,
+        dcf: 0.15
+      }
+    }
+
     if (strategy && strategy.parameters && strategy.parameters.length > 0) {
       // 重置策略参数
       form.value.strategy_params = {}
@@ -1297,6 +1482,57 @@ onUnmounted(() => {
       align-items: center;
       justify-content: center;
       min-height: 300px;
+    }
+
+    // 多锚点权重配置样式
+    .anchor-weight-config {
+      h4 {
+        margin: 0 0 10px 0;
+        font-size: 15px;
+        font-weight: 600;
+        color: #303133;
+      }
+
+      .weight-tip {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 12px;
+        margin-bottom: 15px;
+        background: #f0f9ff;
+        border: 1px solid #b3d8ff;
+        border-radius: 4px;
+        font-size: 13px;
+        color: #409eff;
+
+        .el-icon {
+          font-size: 16px;
+        }
+      }
+
+      .weight-form {
+        .el-form-item {
+          margin-bottom: 12px;
+        }
+      }
+
+      .weight-total {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 10px;
+        margin-top: 8px;
+        background: #f5f7fa;
+        border-radius: 4px;
+        font-weight: 600;
+        font-size: 15px;
+        color: #67c23a;
+
+        &.weight-invalid {
+          color: #f56c6c;
+          background: #fef0f0;
+        }
+      }
     }
 
     .operation-buttons {

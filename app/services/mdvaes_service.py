@@ -38,19 +38,43 @@ class MDVAESService:
         risk_adjustment: float = 0.1,
         use_margin: bool = True,
         margin_buy: float = 0.8,
-        margin_sell: float = 1.2
+        margin_sell: float = 1.2,
+        anchor_weight: Optional[Dict[str, float]] = None
     ) -> MDVAESCalculateResponse:
-        """计算 MDVAES 估值"""
+        """计算 MDVAES 估值
+
+        Args:
+            symbol: 股票代码
+            calculation_date: 计算日期
+            forecast_years: EPS预测年数
+            peg_base: PEG基数
+            risk_adjustment: 风险调整幅度
+            use_margin: 是否使用安全边际
+            margin_buy: 买入安全边际
+            margin_sell: 卖出安全边际
+            anchor_weight: 多锚点权重配置，格式: {"peg": 0.4, "pe_historical": 0.3, "pb": 0.15, "dcf": 0.15}
+                          如果为 None，则使用 MDVAESParams 中的默认权重
+        """
         try:
-            # 1. 构建参数
-            params = MDVAESParams(
-                forecast_years=forecast_years,
-                peg_base=peg_base,
-                risk_adjustment=risk_adjustment,
-                signal_mode="safety_margin" if use_margin else "valuation_range",
-                safety_margin_buy=margin_buy,
-                safety_margin_sell=margin_sell
-            )
+            # 1. 构建参数（如果传了 anchor_weight 则使用，否则使用默认值）
+            params_kwargs = {
+                "forecast_years": forecast_years,
+                "peg_base": peg_base,
+                "risk_adjustment": risk_adjustment,
+                "signal_mode": "safety_margin" if use_margin else "valuation_range",
+                "safety_margin_buy": margin_buy,
+                "safety_margin_sell": margin_sell
+            }
+
+            # 如果前端传了 anchor_weight，则使用前端的权重
+            if anchor_weight is not None:
+                # 验证权重总和
+                total_weight = sum(anchor_weight.values())
+                if abs(total_weight - 1.0) > 0.01:
+                    raise ValueError(f"权重总和必须为1.0，当前为{total_weight:.2f}")
+                params_kwargs["anchor_weight"] = anchor_weight
+
+            params = MDVAESParams(**params_kwargs)
             params.validate()
 
             # 2. 获取 EPS 预测
@@ -140,21 +164,61 @@ class MDVAESService:
 
     async def get_default_parameters(self) -> MDVAESParametersResponse:
         """获取默认参数"""
+        from app.models.mdvaes import AnchorWeightModel
+
+        # 构建默认权重响应
+        default_anchor_weight = AnchorWeightModel(
+            peg=self._default_params.anchor_weight["peg"],
+            pe_historical=self._default_params.anchor_weight["pe_historical"],
+            pb=self._default_params.anchor_weight["pb"],
+            dcf=self._default_params.anchor_weight["dcf"]
+        )
+
         return MDVAESParametersResponse(
             forecast_years=self._default_params.forecast_years,
             peg_base=self._default_params.peg_base,
             risk_adjustment=self._default_params.risk_adjustment,
             use_margin=self._default_params.signal_mode == "safety_margin",
             margin_buy=self._default_params.safety_margin_buy,
-            margin_sell=self._default_params.safety_margin_sell
+            margin_sell=self._default_params.safety_margin_sell,
+            anchor_weight=default_anchor_weight
         )
 
     async def update_parameters(self, updates: Dict[str, Any]) -> MDVAESParametersResponse:
-        """更新参数（返回更新后的参数）"""
-        # 当前实现：返回更新后的默认参数
-        # 未来可以添加用户参数持久化
-        params = MDVAESParams(**{**self._default_params.__dict__, **updates})
+        """更新参数（返回更新后的参数）
+
+        支持更新 anchor_weight，格式: {"peg": 0.4, "pe_historical": 0.3, "pb": 0.15, "dcf": 0.15}
+        """
+        from app.models.mdvaes import AnchorWeightModel
+
+        # 处理 anchor_weight
+        anchor_weight = None
+        if "anchor_weight" in updates and updates["anchor_weight"] is not None:
+            weight_dict = updates["anchor_weight"]
+            # 验证权重总和
+            total_weight = sum(weight_dict.values())
+            if abs(total_weight - 1.0) > 0.01:
+                raise ValueError(f"权重总和必须为1.0，当前为{total_weight:.2f}")
+            anchor_weight = weight_dict
+
+        # 构建参数（移除 anchor_weight，因为 MDVAESParams 会处理）
+        updates_for_params = {k: v for k, v in updates.items() if k != "anchor_weight"}
+
+        # 合并默认参数和更新参数
+        params_dict = {**self._default_params.__dict__, **updates_for_params}
+        if anchor_weight is not None:
+            params_dict["anchor_weight"] = anchor_weight
+
+        params = MDVAESParams(**params_dict)
         params.validate()
+
+        # 构建响应权重
+        response_anchor_weight = AnchorWeightModel(
+            peg=params.anchor_weight["peg"],
+            pe_historical=params.anchor_weight["pe_historical"],
+            pb=params.anchor_weight["pb"],
+            dcf=params.anchor_weight["dcf"]
+        )
 
         return MDVAESParametersResponse(
             forecast_years=params.forecast_years,
@@ -162,7 +226,8 @@ class MDVAESService:
             risk_adjustment=params.risk_adjustment,
             use_margin=params.signal_mode == "safety_margin",
             margin_buy=params.safety_margin_buy,
-            margin_sell=params.safety_margin_sell
+            margin_sell=params.safety_margin_sell,
+            anchor_weight=response_anchor_weight
         )
 
     async def get_cache_status(self) -> CacheStatusResponse:

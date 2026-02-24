@@ -31,6 +31,15 @@
           >
             {{ item.market }}
           </el-tag>
+          <!-- 数据来源标记（调试用，可选显示） -->
+          <el-tag
+            v-if="item._source"
+            size="small"
+            :type="item._source === 'stock_basic_info' ? 'success' : 'info'"
+            class="stock-source-tag"
+          >
+            {{ item._source === 'stock_basic_info' ? '基础表' : '信息表' }}
+          </el-tag>
         </div>
       </template>
     </el-autocomplete>
@@ -208,6 +217,11 @@ function getMarketType(market: string): string {
 
 .stock-market-tag {
   font-size: 12px;
+}
+
+.stock-source-tag {
+  font-size: 11px;
+  opacity: 0.8;
 }
 
 .selected-stock-info {

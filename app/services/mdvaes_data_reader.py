@@ -432,6 +432,8 @@ class MDVAESDataReader:
         """获取当前每股自由现金流 FCFPS（同步版本）
 
         优先获取 fcfps（每股自由现金流），如果不存在则尝试使用 cfps（每股经营现金流）
+
+        注意：Tushare API 返回 fcfe_ps，同步服务会将其映射为 fcfps 存入数据库
         """
         db = self._get_sync_db()
         calculation_date_yyyymmdd = calculation_date.replace("-", "")

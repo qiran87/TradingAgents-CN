@@ -69,6 +69,7 @@ export interface StockSearchResult {
   stock_name: string                 // 股票名称
   market: string                     // 市场
   industry?: string                  // 行业
+  _source?: 'stock_info' | 'stock_basic_info'  // 数据来源（可选）
 }
 
 /**

@@ -29,6 +29,15 @@ class MDVAESStrategy(BaseStrategy):
         self.margin_buy = self.get_parameter("margin_buy", 0.8)
         self.margin_sell = self.get_parameter("margin_sell", 1.2)
 
+        # 多锚点权重配置（从前端传入的 anchor_weight 参数中获取）
+        anchor_weight = self.get_parameter("anchor_weight", None)
+        if anchor_weight:
+            # 前端传入的是字典格式: {"peg": 0.4, "pe_historical": 0.3, "pb": 0.15, "dcf": 0.15}
+            self.anchor_weight = anchor_weight
+        else:
+            # 使用默认权重
+            self.anchor_weight = {"peg": 0.4, "pe_historical": 0.3, "pb": 0.15, "dcf": 0.15}
+
         # 内部状态
         self.data_reader = MDVAESDataReader()
         self.growth_calculator = GrowthCalculator()
@@ -184,15 +193,17 @@ class MDVAESStrategy(BaseStrategy):
         """
         date_str = timestamp.strftime("%Y-%m-%d")
         try:
-            # 1. 构建 MDVAES 参数
-            params = MDVAESParams(
-                forecast_years=self.forecast_years,
-                peg_base=self.peg_base,
-                risk_adjustment=self.risk_adjustment,
-                signal_mode="safety_margin" if self.use_margin else "valuation_range",
-                safety_margin_buy=self.margin_buy,
-                safety_margin_sell=self.margin_sell
-            )
+            # 1. 构建 MDVAES 参数（包含 anchor_weight）
+            params_kwargs = {
+                "forecast_years": self.forecast_years,
+                "peg_base": self.peg_base,
+                "risk_adjustment": self.risk_adjustment,
+                "signal_mode": "safety_margin" if self.use_margin else "valuation_range",
+                "safety_margin_buy": self.margin_buy,
+                "safety_margin_sell": self.margin_sell,
+                "anchor_weight": self.anchor_weight  # 使用从前端传入的权重
+            }
+            params = MDVAESParams(**params_kwargs)
             params.validate()
 
             # 2. 获取 EPS 预测（使用同步方法）

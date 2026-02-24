@@ -67,8 +67,19 @@ async def calculate_mdvaes_valuation(
     基于分析师盈利预测或历史 EPS 外推，
     使用对数最小二乘法计算增长率，
     通过多锚点估值(PEG/PE/PB/DCF)计算内在价值。
+
+    **权重配置：**
+    - 如果请求中包含 anchor_weight，使用自定义权重
+    - 如果不传 anchor_weight，使用系统默认权重 (PEG:40%, PE:30%, PB:15%, DCF:15%)
     """
     service = get_mdvaes_service()
+
+    # 处理 anchor_weight：如果传了就转换为字典，否则传 None
+    anchor_weight_dict = None
+    if request.anchor_weight is not None:
+        # 验证权重总和
+        request.anchor_weight.validate_total_weight()
+        anchor_weight_dict = request.anchor_weight.model_dump()
 
     result = await service.calculate_valuation(
         symbol=request.symbol,
@@ -78,7 +89,8 @@ async def calculate_mdvaes_valuation(
         risk_adjustment=request.risk_adjustment,
         use_margin=request.use_margin,
         margin_buy=request.margin_buy,
-        margin_sell=request.margin_sell
+        margin_sell=request.margin_sell,
+        anchor_weight=anchor_weight_dict
     )
 
     return result
@@ -104,6 +116,11 @@ async def update_mdvaes_parameters(
     更新 MDVAES 参数
 
     只需要提供要更新的字段，未提供的字段保持不变。
+
+    **权重配置：**
+    - anchor_weight 可选，格式: {"peg": 0.4, "pe_historical": 0.3, "pb": 0.15, "dcf": 0.15}
+    - 四个权重总和必须等于 1.0
+    - 不传 anchor_weight 则保持现有配置
     """
     service = get_mdvaes_service()
 
