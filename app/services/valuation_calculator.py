@@ -14,9 +14,20 @@ class ValuationCalculator:
         eps: float,
         current_pe: float,
         bond_rate: float,
-        params: MDVAESParams
+        params: MDVAESParams,
+        fcfps: float = None
     ) -> ValuationResult:
-        """计算多锚点估值"""
+        """计算多锚点估值
+
+        Args:
+            growth_metrics: 增长指标
+            risk_metrics: 风险指标
+            eps: 每股收益
+            current_pe: 当前市盈率
+            bond_rate: 无风险利率
+            params: MDVAES 参数
+            fcfps: 每股自由现金流（可选，如果提供则用于 DCF 计算）
+        """
         # 1. PEG 估值
         peg_valuation = ValuationCalculator._calc_peg_valuation(
             eps, growth_metrics, bond_rate, params
@@ -30,10 +41,15 @@ class ValuationCalculator:
         # 3. PB 估值（简化版，使用固定倍数）
         pb_valuation = eps * 1.5
 
-        # 4. DCF 估值（简化版）
-        dcf_valuation = ValuationCalculator._calc_dcf_valuation(
-            eps, growth_metrics.growth_rate, bond_rate, params
-        )
+        # 4. DCF 估值（优先使用 fcfps，否则使用 eps）
+        if fcfps is not None and fcfps > 0:
+            dcf_valuation = ValuationCalculator._calc_dcf_valuation_fcfps(
+                fcfps, growth_metrics.growth_rate, bond_rate, params
+            )
+        else:
+            dcf_valuation = ValuationCalculator._calc_dcf_valuation(
+                eps, growth_metrics.growth_rate, bond_rate, params
+            )
 
         # 5. 多锚点加权
         weighted_valuation = (
@@ -78,9 +94,14 @@ class ValuationCalculator:
 
     @staticmethod
     def _calc_peg_valuation(eps: float, growth_metrics: GrowthMetrics, bond_rate: float, params: MDVAESParams) -> float:
-        """计算 PEG 估值"""
+        """计算 PEG 估值
+
+        修正版公式：使用 growth_rate × 100 而非 growth_rate
+        原因：原始公式 EPS × growth_rate 适用于小EPS公司，对高EPS公司会严重低估
+        """
         interest_adjustment = 1 - params.peg_interest_sensitivity * bond_rate
-        peg_valuation = eps * growth_metrics.growth_rate * params.peg_base * interest_adjustment
+        # 修正：使用增长率百分比形式（如 4.47% → 4.47）而非小数形式（0.0447）
+        peg_valuation = eps * (growth_metrics.growth_rate * 100) * params.peg_base * interest_adjustment
         return max(peg_valuation, 0)
 
     @staticmethod
@@ -109,6 +130,46 @@ class ValuationCalculator:
         terminal_value = terminal_eps * (1 + terminal_growth) / (required_return - terminal_growth)
         discounted_terminal = terminal_value / ((1 + required_return) ** params.forecast_years)
 
+        dcf_valuation = sum(forecast_values) + discounted_terminal
+        return max(dcf_valuation, 0)
+
+    @staticmethod
+    def _calc_dcf_valuation_fcfps(fcfps: float, growth_rate: float, discount_rate: float, params: MDVAESParams) -> float:
+        """使用每股自由现金流 (FCFPS) 的 DCF 估值
+
+        相比基于 EPS 的简化 DCF，使用真实的自由现金流能更准确地反映公司价值。
+
+        Args:
+            fcfps: 每股自由现金流
+            growth_rate: 增长率
+            discount_rate: 折现率（无风险利率）
+            params: MDVAES 参数
+
+        Returns:
+            DCF 估值结果
+        """
+        terminal_growth = 0.03  # 终值增长率 3%
+        required_return = discount_rate + 0.05  # 必要回报率 = 无风险利率 + 5%风险溢价
+
+        # 防御性检查：增长率不能超过必要回报率
+        if growth_rate >= required_return:
+            growth_rate = required_return - 0.01
+
+        # 预测期现金流折现
+        forecast_values = []
+        for i in range(1, params.forecast_years + 1):
+            # 预测未来自由现金流
+            forecast_fcf = fcfps * ((1 + growth_rate) ** i)
+            # 折现到现值
+            discounted_value = forecast_fcf / ((1 + required_return) ** i)
+            forecast_values.append(discounted_value)
+
+        # 终值计算（永续增长模型）
+        terminal_fcf = fcfps * ((1 + growth_rate) ** params.forecast_years)
+        terminal_value = terminal_fcf * (1 + terminal_growth) / (required_return - terminal_growth)
+        discounted_terminal = terminal_value / ((1 + required_return) ** params.forecast_years)
+
+        # 总估值 = 预测期折现总和 + 终值折现
         dcf_valuation = sum(forecast_values) + discounted_terminal
         return max(dcf_valuation, 0)
 

@@ -1049,7 +1049,7 @@ class MDVAESDataSyncService:
                         ts_code=ts_codes_str,
                         start_date=year_start,
                         end_date=year_end,
-                        fields="ts_code,ann_date,end_date,eps,dt_eps",
+                        fields="ts_code,ann_date,end_date,eps,dt_eps,fcfps,cfps",
                         api_name="fina_indicator"
                     )
 
@@ -1069,9 +1069,9 @@ class MDVAESDataSyncService:
                     operations = []
                     for _, row in df.iterrows():
                         record = row.to_dict()
-                        # 过滤掉 NaN 值
+                        # 过滤掉 NaN 值，添加 fcfps 和 cfps 字段
                         filtered_record = {k: v for k, v in record.items()
-                                         if pd.notna(v) and k in ['ts_code', 'ann_date', 'end_date', 'eps', 'dt_eps']}
+                                         if pd.notna(v) and k in ['ts_code', 'ann_date', 'end_date', 'eps', 'dt_eps', 'fcfps', 'cfps']}
                         if 'ts_code' in filtered_record and 'end_date' in filtered_record:
                             operations.append(
                                 UpdateOne(

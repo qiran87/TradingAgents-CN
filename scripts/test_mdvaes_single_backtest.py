@@ -33,7 +33,7 @@ from app.domain.mdvaes import (
 )
 from app.services.mdvaes_data_reader import MDVAESDataReader
 from app.services.growth_calculator import GrowthCalculator
-from app.services.valuation_calculator import ValuationCalculator
+# from app.services.valuation_calculator import ValuationCalculator  # 估值计算内联在函数中
 
 
 def print_section(title: str):
@@ -60,22 +60,118 @@ def get_sync_db():
     return client[settings.MONGODB_DATABASE]
 
 
+def extract_symbol(code: str) -> str:
+    """从股票代码中提取 symbol（纯数字部分）
+
+    支持格式：
+    - ts_code: "600519.SH", "000001.SZ" -> "600519", "000001"
+    - symbol: "600519", "000001" -> "600519", "000001"
+
+    stock_daily_quotes 表使用 symbol 字段存储
+    """
+    if '.' in code:
+        # "600519.SH" -> "600519"
+        return code.split('.')[0]
+    return code
+
+
 def get_current_price(db, symbol: str, calculation_date: str) -> float:
     """获取当前价格
 
-    从 stock_daily_quotes 表获取最近交易日的收盘价
+    从 MongoDB stock_daily_quotes 表获取价格数据。
+    表使用 symbol 字段（如 "600519"），而不是 ts_code（如 "600519.SH"）。
+
     注意：使用 trade_date（交易日期），必须严格小于 calculation_date
     """
     calculation_date_yyyymmdd = calculation_date.replace("-", "")
 
-    price_data = db.stock_daily_quotes.find_one({
-        "ts_code": symbol,
-        "trade_date": {"$lt": calculation_date_yyyymmdd}
-    }, sort=[("trade_date", -1)], projection=["close"])
+    # 提取 symbol（纯数字代码）
+    symbol_value = extract_symbol(symbol)
 
-    if price_data and "close" in price_data:
-        return float(price_data["close"])
+    # 从数据库查询价格
+    print(f"    🔍 正在从数据库查询价格...")
+    print(f"    📋 MongoDB 请求参数:")
+    print(f"       - 计算日期: {calculation_date} (YYYY-MM-DD)")
+    print(f"       - 查询截止日期: < {calculation_date_yyyymmdd} (YYYYMMDD)")
+    print(f"       - 原始股票代码: {symbol}")
+    print(f"       - 提取 symbol: {symbol_value}")
 
+    try:
+        # 构建查询条件 - 只使用 symbol 字段
+        match_condition = {
+            "symbol": symbol_value,
+            "trade_date": {"$lt": calculation_date_yyyymmdd}
+        }
+
+        pipeline = [
+            {"$match": match_condition},
+            {"$sort": {"trade_date": -1}},
+            {"$limit": 1},
+            {"$project": {"close": 1, "_id": 0}}
+        ]
+
+        print(f"\n    📋 MongoDB 查询详情:")
+        print(f"       - 查询字段: symbol")
+        print(f"       - 查询值: {symbol_value}")
+        print(f"       - 匹配条件: {match_condition}")
+        print(f"       - 排序: {{'trade_date': -1}}")
+        print(f"       - 聚合管道: {pipeline}")
+
+        result = list(db.stock_daily_quotes.aggregate(pipeline))
+
+        print(f"\n       - 返回结果数量: {len(result)}")
+        if result:
+            print(f"       - 结果内容: {result[0]}")
+
+        if result and "close" in result[0]:
+            print(f"    ✅ 查询成功: symbol={symbol_value} → 收盘价={result[0]['close']:.2f}")
+            return float(result[0]["close"])
+
+        # 如果没有查询到结果
+        print(f"    ⚠️ 数据库中未找到 symbol={symbol_value} 在 {calculation_date} 之前的价格数据")
+
+    except Exception as e:
+        error_msg = str(e)
+        if "MaxTimeMSExpired" in error_msg or "time limit" in error_msg:
+            print(f"    ⏱️ symbol={symbol_value} 查询超时")
+        else:
+            print(f"    ⚠️ 查询 symbol={symbol_value} 失败: {e}")
+
+    # 如果数据库查询失败，尝试 Tushare API 作为降级方案
+    from app.core.config import settings
+    if settings.TUSHARE_TOKEN:
+        print(f"    ⚠️ 数据库查询失败，尝试从 Tushare API 获取...")
+        try:
+            import tushare as ts
+            from datetime import datetime, timedelta
+
+            pro = ts.pro_api(settings.TUSHARE_TOKEN)
+
+            # 计算查询日期范围（向前推30天，确保能找到交易日）
+            calc_dt = datetime.strptime(calculation_date, "%Y-%m-%d")
+            start_date = (calc_dt - timedelta(days=30)).strftime("%Y%m%d")
+            end_date = calculation_date_yyyymmdd
+
+            # Tushare API 需要 ts_code 格式
+            ts_code = symbol if '.' in symbol else f"{symbol}.SH" if symbol.startswith(('60', '68', '90')) else f"{symbol}.SZ"
+
+            print(f"       - Tushare 查询代码: {ts_code}")
+
+            df = pro.daily(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date
+            )
+
+            if not df.empty and 'close' in df.columns:
+                latest = df.iloc[-1]
+                print(f"    ✅ 从 Tushare API 获取价格: {latest['close']:.2f}")
+                return float(latest['close'])
+
+        except Exception as e:
+            print(f"    ⚠️ Tushare API 调用失败: {e}")
+
+    # 如果所有尝试都失败，抛出错误（让用户手动输入）
     raise ValueError(f"无法获取 {symbol} 在 {calculation_date} 之前的价格数据")
 
 
@@ -102,7 +198,6 @@ def run_single_backtest(
     # 初始化服务
     data_reader = MDVAESDataReader()
     growth_calculator = GrowthCalculator()
-    valuation_calculator = ValuationCalculator()
     db = get_sync_db()
 
     # ==================== 步骤1: 获取EPS预测 ====================
@@ -235,6 +330,23 @@ def run_single_backtest(
             risk_level=RiskLevel.MEDIUM
         )
 
+    # ==================== 步骤5.5: 获取每股自由现金流 ====================
+    print_section("步骤5.5: 获取每股自由现金流 (FCFPS)")
+
+    try:
+        current_fcfps = data_reader.get_current_fcfps_sync(symbol, calculation_date)
+
+        if current_fcfps is not None:
+            print(f"\n✅ 每股自由现金流 (FCFPS): {current_fcfps:.4f} 元")
+            print(f"📊 FCFPS/EPS 比率: {current_fcfps / current_eps:.2%}")
+        else:
+            print(f"\n⚠️ 未找到 FCFPS 数据，将使用 EPS 进行 DCF 计算")
+            current_fcfps = None
+
+    except Exception as e:
+        print(f"\n⚠️ 获取 FCFPS 失败: {e}，将使用 EPS 进行 DCF 计算")
+        current_fcfps = None
+
     # ==================== 步骤6: 构建MDVAES参数 ====================
     print_section("步骤6: 构建MDVAES参数")
 
@@ -265,10 +377,11 @@ def run_single_backtest(
     # 7.1 PEG估值
     print_subsection("7.1 PEG估值")
     interest_adjustment = 1 - params.peg_interest_sensitivity * bond_rate
-    peg_valuation = current_eps * growth_metrics.growth_rate * params.peg_base * interest_adjustment
-    print(f"公式: PEG估值 = EPS × 增长率 × PEG基数 × (1 - 利率敏感度 × 国债利率)")
-    print(f"     = {current_eps:.4f} × {growth_metrics.growth_rate:.2%} × {params.peg_base} × (1 - {params.peg_interest_sensitivity} × {bond_rate:.2%})")
-    print(f"     = {current_eps:.4f} × {growth_metrics.growth_rate:.2%} × {params.peg_base} × {interest_adjustment:.4f}")
+    # 修正公式：使用增长率百分比形式（如 4.47% → 4.47）而非小数形式（0.0447）
+    peg_valuation = current_eps * (growth_metrics.growth_rate * 100) * params.peg_base * interest_adjustment
+    print(f"公式: PEG估值 = EPS × 增长率(%) × PEG基数 × (1 - 利率敏感度 × 国债利率)")
+    print(f"     = {current_eps:.4f} × {growth_metrics.growth_rate * 100:.2f} × {params.peg_base} × (1 - {params.peg_interest_sensitivity} × {bond_rate:.2%})")
+    print(f"     = {current_eps:.4f} × {growth_metrics.growth_rate * 100:.2f} × {params.peg_base} × {interest_adjustment:.4f}")
     print(f"     = {peg_valuation:.2f} 元")
 
     # 7.2 历史PE估值
@@ -288,7 +401,18 @@ def run_single_backtest(
     print(f"     = {pb_valuation:.2f} 元")
 
     # 7.4 DCF估值
-    print_subsection("7.4 DCF估值 (简化版)")
+    print_subsection("7.4 DCF估值")
+
+    # 根据是否有 FCFPS 决定计算方式
+    if current_fcfps is not None and current_fcfps > 0:
+        print(f"🎯 使用每股自由现金流 (FCFPS) 进行 DCF 估值")
+        dcf_base = current_fcfps
+        dcf_base_name = "FCFPS"
+    else:
+        print(f"⚠️ 无 FCFPS 数据，使用每股收益 (EPS) 进行 DCF 估值")
+        dcf_base = current_eps
+        dcf_base_name = "EPS"
+
     terminal_growth = 0.03
     required_return = bond_rate + 0.05
     if growth_metrics.growth_rate >= required_return:
@@ -299,22 +423,23 @@ def run_single_backtest(
     print(f"终值增长率: {terminal_growth:.2%}")
     print(f"必要回报率: 无风险利率({bond_rate:.2%}) + 5% = {required_return:.2%}")
     print(f"调整后增长率: {adj_growth_rate:.2%}")
+    print(f"基础数据: {dcf_base_name} = {dcf_base:.4f} 元")
 
     forecast_values = []
-    print(f"\n未来{forecast_years}年EPS预测及折现:")
-    print(f"{'年份':<8} {'预测EPS':<15} {'折现因子':<15} {'折现值':<15}")
+    print(f"\n未来{forecast_years}年{dcf_base_name}预测及折现:")
+    print(f"{'年份':<8} {'预测' + dcf_base_name:<15} {'折现因子':<15} {'折现值':<15}")
     print("-" * 50)
 
     for i in range(1, forecast_years + 1):
-        forecast_eps = current_eps * ((1 + adj_growth_rate) ** i)
+        forecast_value = dcf_base * ((1 + adj_growth_rate) ** i)
         discount_factor = (1 + required_return) ** i
-        discounted_value = forecast_eps / discount_factor
+        discounted_value = forecast_value / discount_factor
         forecast_values.append(discounted_value)
-        print(f"第{i}年    {forecast_eps:<15.4f} {discount_factor:<15.4f} {discounted_value:<15.4f}")
+        print(f"第{i}年    {forecast_value:<15.4f} {discount_factor:<15.4f} {discounted_value:<15.4f}")
 
     # 终值
-    terminal_eps = current_eps * ((1 + adj_growth_rate) ** forecast_years)
-    terminal_value = terminal_eps * (1 + terminal_growth) / (required_return - terminal_growth)
+    terminal_base = dcf_base * ((1 + adj_growth_rate) ** forecast_years)
+    terminal_value = terminal_base * (1 + terminal_growth) / (required_return - terminal_growth)
     discounted_terminal = terminal_value / ((1 + required_return) ** forecast_years)
     print(f"终值      -              -              {discounted_terminal:<15.4f}")
 

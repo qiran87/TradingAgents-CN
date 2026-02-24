@@ -213,7 +213,10 @@ class MDVAESStrategy(BaseStrategy):
             # 6. 获取国债利率（使用同步方法）
             bond_rate = self.data_reader.get_bond_rate_sync(date_str)
 
-            # 7. 构建风险指标（简化版，实际应从财务数据计算）
+            # 7. 获取每股自由现金流（使用同步方法）
+            current_fcfps = self.data_reader.get_current_fcfps_sync(self.symbol, date_str)
+
+            # 8. 构建风险指标（简化版，实际应从财务数据计算）
             risk_metrics = RiskMetrics(
                 debt_to_assets=0.5,
                 current_ratio=1.5,
@@ -222,14 +225,15 @@ class MDVAESStrategy(BaseStrategy):
                 risk_level=RiskLevel.MEDIUM
             )
 
-            # 8. 计算估值
+            # 9. 计算估值（如果存在 fcfps 则使用，否则使用 eps）
             valuation_result = self.valuation_calculator.calculate(
                 growth_metrics=growth_metrics,
                 risk_metrics=risk_metrics,
                 eps=current_eps,
                 current_pe=current_pe,
                 bond_rate=bond_rate,
-                params=params
+                params=params,
+                fcfps=current_fcfps
             )
 
             return {
@@ -237,8 +241,11 @@ class MDVAESStrategy(BaseStrategy):
                 "valuation": valuation_result,
                 "growth_metrics": growth_metrics,
                 "eps_forecasts": eps_forecasts,
+                "current_eps": current_eps,
+                "current_fcfps": current_fcfps,
                 "current_pe": current_pe,
-                "bond_rate": bond_rate
+                "bond_rate": bond_rate,
+                "used_fcfps": current_fcfps is not None  # 标记是否使用了 FCFPS
             }
 
         except Exception as e:

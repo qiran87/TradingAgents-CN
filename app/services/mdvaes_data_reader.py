@@ -427,3 +427,29 @@ class MDVAESDataReader:
         if bond_data:
             return bond_data.get("yield", 0) / 100
         return 0.0275
+
+    def get_current_fcfps_sync(self, symbol: str, calculation_date: str) -> Optional[float]:
+        """获取当前每股自由现金流 FCFPS（同步版本）
+
+        优先获取 fcfps（每股自由现金流），如果不存在则尝试使用 cfps（每股经营现金流）
+        """
+        db = self._get_sync_db()
+        calculation_date_yyyymmdd = calculation_date.replace("-", "")
+
+        # 优先使用 fcfps（每股自由现金流）
+        fcf_data = db.mdvaes_eps_history.find_one({
+            "ts_code": symbol,
+            "ann_date": {"$lt": calculation_date_yyyymmdd},
+            "fcfps": {"$ne": None, "$exists": True}
+        }, sort=[("ann_date", -1)], projection=["fcfps", "cfps"])
+
+        if fcf_data:
+            # 优先返回 fcfps
+            if "fcfps" in fcf_data and fcf_data["fcfps"] is not None:
+                return float(fcf_data["fcfps"])
+            # 如果没有 fcfps，尝试使用 cfps（每股经营现金流）作为近似
+            elif "cfps" in fcf_data and fcf_data["cfps"] is not None:
+                return float(fcf_data["cfps"])
+
+        # 如果数据库没有数据，返回 None（调用方需要处理）
+        return None
