@@ -87,13 +87,20 @@ async def start_backtest(
         backtest_id = f"bt_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}"
 
         # 2. 构建参数字典
+        # 复制策略参数，避免修改原始请求
+        strategy_params = (request.strategy_params or {}).copy()
+
+        # 对于 MDVAES 策略，确保 symbol 参数与 stock_code 一致
+        if request.strategy_id == 'mdvaes':
+            strategy_params['symbol'] = request.stock_code
+
         parameters = {
             "stock_code": request.stock_code,
             "start_date": request.start_date,
             "end_date": request.end_date,
             "initial_capital": request.initial_capital,
             "strategy_id": request.strategy_id,
-            "strategy_params": request.strategy_params
+            "strategy_params": strategy_params
         }
 
         # 3. 获取用户ID (使用JWT sub字段)

@@ -839,7 +839,7 @@ const strategies = ref([
       { name: 'risk_adjustment', label: '风险调整幅度', type: 'number', min: 0, max: 0.3, step: 0.01, default: 0.1, precision: 3 },
       { name: 'rebalance_frequency', label: '重新估值频率(天)', type: 'number', min: 1, max: 365, step: 1, default: 30, precision: 0 },
       { name: 'use_margin', label: '使用安全边际', type: 'boolean', default: true },
-      { name: 'margin_buy', label: '买入安全边际', type: 'number', min: 0.5, max: 0.95, step: 0.05, default: 0.8, precision: 3 },
+      { name: 'margin_buy', label: '买入安全边际', type: 'number', min: 0.5, max: 1.03, step: 0.05, default: 0.8, precision: 3 },
       { name: 'margin_sell', label: '卖出安全边际', type: 'number', min: 1.05, max: 2.0, step: 0.05, default: 1.2, precision: 3 }
     ],
     // 多锚点权重默认配置
@@ -1011,9 +1011,10 @@ async function confirmStartBacktest() {
       showParamsConfirmDialog.value = true
       return
     }
-    // 将权重配置添加到策略参数中
+    // 将权重配置添加到策略参数中，同时将 symbol 更新为实际的 stock_code
     requestParams.strategy_params = {
       ...requestParams.strategy_params,
+      symbol: requestParams.stock_code,  // 使用用户选择的股票代码
       anchor_weight: { ...requestParams.anchor_weight }
     }
   }

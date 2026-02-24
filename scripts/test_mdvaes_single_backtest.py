@@ -324,7 +324,9 @@ def run_single_backtest(
             current_ratio=1.5,
             quick_ratio=1.2,
             cashflow_to_income=1.1,
-            risk_level=RiskLevel.MEDIUM
+            risk_level=RiskLevel.MEDIUM,
+            bps=None,  # 每股净资产（无数据时为 None）
+            roe=None   # 净资产收益率（无数据时为 None）
         )
     else:
         # 尝试从数据库获取真实财务比率（使用同步查询）
@@ -355,22 +357,34 @@ def run_single_backtest(
                     "current_ratio": ratios_data.get("current_ratio"),
                     "quick_ratio": ratios_data.get("quick_ratio"),
                     "roe": ratios_data.get("roe"),
-                    "roa": ratios_data.get("roa")
+                    "roa": ratios_data.get("roa"),
+                    "bps": ratios_data.get("bps")  # 每股净资产
                 }
                 print(f"\n✅ 使用真实财务数据:")
                 ann_date_val = ratios_data.get('ann_date')
+                end_date_val = ratios_data.get('end_date')
                 print(f"   公告日期: {ann_date_val if ann_date_val else 'N/A'}")
+                print(f"   报告期: {end_date_val if end_date_val else 'N/A'}")
                 # 数据库中的百分比数值直接显示即可（如14.14表示14.14%）
                 debt_val = ratios.get('debt_to_assets')
                 current_val = ratios.get('current_ratio')
                 quick_val = ratios.get('quick_ratio')
                 roe_val = ratios.get('roe')
                 roa_val = ratios.get('roa')
+                bps_val = ratios.get('bps')
                 print(f"   资产负债率: {debt_val if debt_val is not None else 50:.2f}%")
                 print(f"   流动比率: {current_val if current_val is not None else 1.5:.2f}")
                 print(f"   速动比率: {quick_val if quick_val is not None else 1.2:.2f}")
-                print(f"   ROE: {roe_val if roe_val is not None else 10:.2f}%")
+                print(f"   ROE(原始): {roe_val if roe_val is not None else 'N/A'}%")
                 print(f"   ROA: {roa_val if roa_val is not None else 5:.2f}%")
+                print(f"   BPS: {bps_val if bps_val is not None else 'N/A':.2f} 元/股")
+
+                # 获取年化ROE（使用同比外推法）
+                annualized_roe = data_reader.get_current_roe_sync(symbol, calculation_date)
+                if annualized_roe is not None:
+                    print(f"   ROE(年化): {annualized_roe * 100:.2f}% (同比外推)")
+                else:
+                    print(f"   ROE(年化): N/A")
 
                 # 根据财务数据评估风险等级（将百分比转换为小数）
                 debt_ratio_pct = debt_val if debt_val is not None else 50
@@ -388,7 +402,9 @@ def run_single_backtest(
                     current_ratio=current_val if current_val is not None else 1.5,
                     quick_ratio=quick_val if quick_val is not None else 1.2,
                     cashflow_to_income=1.1,
-                    risk_level=risk_level
+                    risk_level=risk_level,
+                    bps=bps_val,  # 每股净资产（用于PB估值）
+                    roe=annualized_roe  # 使用年化ROE（已经是小数形式）
                 )
             else:
                 # 提供更详细的诊断信息
@@ -425,7 +441,9 @@ def run_single_backtest(
                 current_ratio=1.5,
                 quick_ratio=1.2,
                 cashflow_to_income=1.1,
-                risk_level=RiskLevel.MEDIUM
+                risk_level=RiskLevel.MEDIUM,
+                bps=None,  # 每股净资产（无数据时为 None）
+                roe=None   # 净资产收益率（无数据时为 None）
             )
 
     # ==================== 步骤5.5: 获取每股自由现金流 ====================
@@ -505,12 +523,31 @@ def run_single_backtest(
     print(f"     = {current_eps:.4f} × {current_pe:.2f} × {growth_adjustment:.4f} × 0.8")
     print(f"     = {pe_historical_valuation:.2f} 元")
 
-    # 7.3 PB估值
+    # 7.3 PB估值（基于PB-ROE模型）
     print_subsection("7.3 PB估值")
-    pb_valuation = current_eps * 1.5
-    print(f"公式: PB估值 = EPS × 1.5")
-    print(f"     = {current_eps:.4f} × 1.5")
-    print(f"     = {pb_valuation:.2f} 元")
+
+    # 从 risk_metrics 中获取 bps 和 roe
+    bps = risk_metrics.bps
+    roe = risk_metrics.roe
+
+    if bps is not None and bps > 0 and roe is not None and roe > 0:
+        # 使用 PB-ROE 模型：合理 PB = ROE / 要求收益率
+        target_return = 0.10  # 目标收益率 10%
+        target_pb = roe / target_return
+        pb_valuation = bps * target_pb
+        print(f"✅ 使用 PB-ROE 模型计算")
+        print(f"公式: PB估值 = BPS × (ROE / 目标收益率)")
+        print(f"     = {bps:.2f} × ({roe:.2%} / {target_return:.0%})")
+        print(f"     = {bps:.2f} × {target_pb:.2f}")
+        print(f"     = {pb_valuation:.2f} 元")
+        print(f"\n说明: 目标收益率设为 {target_return:.0%}，合理PB倍数 = ROE / 目标收益率 = {target_pb:.2f} 倍")
+    else:
+        # 降级：使用简化版本（基于 EPS）
+        print(f"⚠️ 缺少BPS或ROE数据，使用简化算法")
+        pb_valuation = current_eps * 1.5
+        print(f"公式: PB估值 = EPS × 1.5")
+        print(f"     = {current_eps:.4f} × 1.5")
+        print(f"     = {pb_valuation:.2f} 元")
 
     # 7.4 DCF估值 (使用 ValuationCalculator)
     print_subsection("7.4 DCF估值")
@@ -694,6 +731,21 @@ def run_single_backtest(
     print(f"│  {'估值区间':<30} [{lower_bound:.2f}, {upper_bound:.2f}] 元 │")
     print(f"│  {'置信度':<30} {confidence:>18.2%} │")
     print(f"│ {'':^76} │")
+
+    # 显示关键财务指标（如果有BPS和ROE）
+    print(f"│  {'关键财务指标':<76} │")
+    print(f"│  {'-' * 60:<60} │")
+    print(f"│  {'EPS':<30} {current_eps:>18.4f} 元 │")
+    if risk_metrics.bps is not None:
+        print(f"│  {'BPS':<30} {risk_metrics.bps:>18.2f} 元 │")
+    else:
+        print(f"│  {'BPS':<30} {'N/A':>18} │")
+    if risk_metrics.roe is not None:
+        print(f"│  {'ROE':<30} {risk_metrics.roe:>18.2%} │")
+    else:
+        print(f"│  {'ROE':<30} {'N/A':>18} │")
+    print(f"│ {'':^76} │")
+
     print(f"│  {'当前价格':<30} {current_price:>18.2f} 元 │")
     print(f"│  {'买入阈值':<30} {buy_threshold:>18.2f} 元 ({margin_buy:.0%}) │")
     print(f"│  {'卖出阈值':<30} {sell_threshold:>18.2f} 元 ({margin_sell:.0%}) │")
@@ -770,8 +822,8 @@ def main():
         print("❌ 风险调整幅度必须在 0-0.3 之间")
         return 1
 
-    if not 0.5 <= args.margin_buy <= 0.95:
-        print("❌ 买入安全边际必须在 0.5-0.95 之间")
+    if not 0.5 <= args.margin_buy <= 1.03:
+        print("❌ 买入安全边际必须在 0.5-1.03 之间")
         return 1
 
     if not 1.05 <= args.margin_sell <= 2.0:

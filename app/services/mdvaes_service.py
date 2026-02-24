@@ -99,15 +99,31 @@ class MDVAESService:
             # 6. 获取财务比率数据
             ratios_data = await self.data_reader.get_financial_ratios(symbol, calculation_date)
 
+            # 6.5 获取年化ROE（使用同比外推法）
+            annualized_roe = await self.data_reader.get_current_roe(symbol, calculation_date)
+
             # 7. 构建风险指标
             if ratios_data:
                 # 使用数据库中的实际数据
+                # 根据资产负债率动态计算风险等级
+                debt_to_assets_pct = ratios_data.get("debt_to_assets", 50)
+                debt_ratio = debt_to_assets_pct / 100.0  # 转换为小数
+
+                if debt_ratio < 0.3:
+                    risk_level = RiskLevel.LOW
+                elif debt_ratio < 0.6:
+                    risk_level = RiskLevel.MEDIUM
+                else:
+                    risk_level = RiskLevel.HIGH
+
                 risk_metrics = RiskMetrics(
-                    debt_to_assets=ratios_data.get("debt_to_assets", 0.5),
+                    debt_to_assets=debt_ratio,  # 使用转换后的小数
                     current_ratio=ratios_data.get("current_ratio", 1.5),
                     quick_ratio=ratios_data.get("quick_ratio", 1.2),
                     cashflow_to_income=1.1,  # 暂时保持默认值
-                    risk_level=RiskLevel.MEDIUM
+                    risk_level=risk_level,  # 使用动态计算的风险等级
+                    bps=ratios_data.get("bps"),  # 每股净资产
+                    roe=annualized_roe  # 使用年化后的ROE（已经是小数形式）
                 )
             else:
                 # 使用默认值
@@ -116,10 +132,12 @@ class MDVAESService:
                     current_ratio=1.5,
                     quick_ratio=1.2,
                     cashflow_to_income=1.1,
-                    risk_level=RiskLevel.MEDIUM
+                    risk_level=RiskLevel.MEDIUM,
+                    bps=None,  # 每股净资产（无数据时为 None）
+                    roe=None   # 净资产收益率（无数据时为 None）
                 )
 
-            # 7. 计算估值
+            # 8. 计算估值
             valuation_result = self.valuation_calculator.calculate(
                 growth_metrics=growth_metrics,
                 risk_metrics=risk_metrics,

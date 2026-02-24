@@ -15,7 +15,9 @@ class ValuationCalculator:
         current_pe: float,
         bond_rate: float,
         params: MDVAESParams,
-        fcfps: float = None
+        fcfps: float = None,
+        bps: float = None,
+        roe: float = None
     ) -> ValuationResult:
         """计算多锚点估值
 
@@ -27,6 +29,8 @@ class ValuationCalculator:
             bond_rate: 无风险利率
             params: MDVAES 参数
             fcfps: 每股自由现金流（可选，如果提供则用于 DCF 计算）
+            bps: 每股净资产（可选，用于 PB 估值）
+            roe: 净资产收益率（可选，用于 PB 估值）
         """
         # 1. PEG 估值
         peg_valuation = ValuationCalculator._calc_peg_valuation(
@@ -38,8 +42,20 @@ class ValuationCalculator:
             eps, current_pe, growth_metrics
         )
 
-        # 3. PB 估值（简化版，使用固定倍数）
-        pb_valuation = eps * 1.5
+        # 3. PB 估值（基于 PB-ROE 模型）
+        # 优先使用 risk_metrics 中的 bps/roe，否则使用传入的参数
+        actual_bps = risk_metrics.bps if risk_metrics.bps is not None else bps
+        actual_roe = risk_metrics.roe if risk_metrics.roe is not None else roe
+
+        if actual_bps is not None and actual_bps > 0 and actual_roe is not None and actual_roe > 0:
+            # 使用 PB-ROE 模型：合理 PB = ROE / 要求收益率
+            # 目标收益率设为 10%
+            target_return = 0.10  # 10%
+            target_pb = actual_roe / target_return
+            pb_valuation = actual_bps * target_pb
+        else:
+            # 降级：使用简化版本（基于 EPS）
+            pb_valuation = eps * 1.5
 
         # 4. DCF 估值（优先使用 fcfps，否则使用 eps）
         if fcfps is not None and fcfps > 0:

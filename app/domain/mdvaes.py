@@ -56,6 +56,8 @@ class RiskMetrics:
     quick_ratio: float  # 速动比率
     cashflow_to_income: float  # 现金流/利润比率
     risk_level: RiskLevel  # 风险等级
+    bps: Optional[float] = None  # 每股净资产（用于 PB 估值）
+    roe: Optional[float] = None  # 净资产收益率（用于 PB 估值）
 
 
 @dataclass(frozen=True)

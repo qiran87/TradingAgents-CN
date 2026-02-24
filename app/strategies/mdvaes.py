@@ -227,14 +227,52 @@ class MDVAESStrategy(BaseStrategy):
             # 7. 获取每股自由现金流（使用同步方法）
             current_fcfps = self.data_reader.get_current_fcfps_sync(self.symbol, date_str)
 
-            # 8. 构建风险指标（简化版，实际应从财务数据计算）
-            risk_metrics = RiskMetrics(
-                debt_to_assets=0.5,
-                current_ratio=1.5,
-                quick_ratio=1.2,
-                cashflow_to_income=1.1,
-                risk_level=RiskLevel.MEDIUM
-            )
+            # 8. 获取财务比率数据（包括 bps 和 roe）
+            db = self.data_reader._get_sync_db()
+            calculation_date_yyyymmdd = date_str.replace("-", "")
+            ratios_data = db.mdvaes_financial_ratios.find_one({
+                "ts_code": self.symbol,
+                "ann_date": {"$lt": calculation_date_yyyymmdd}
+            }, sort=[("ann_date", -1)], projection=["bps", "roe", "debt_to_assets", "current_ratio", "quick_ratio"])
+
+            # 构建风险指标（使用实际数据或默认值）
+            bps = ratios_data.get("bps") if ratios_data else None
+            # ROE 需要使用同比外推法获取年化值
+            roe = self.data_reader.get_current_roe_sync(self.symbol, date_str)
+
+            if ratios_data:
+                # 使用数据库中的实际数据
+                # 根据资产负债率动态计算风险等级
+                debt_to_assets_pct = ratios_data.get("debt_to_assets", 50)
+                debt_ratio = debt_to_assets_pct / 100.0  # 转换为小数
+
+                if debt_ratio < 0.3:
+                    risk_level = RiskLevel.LOW
+                elif debt_ratio < 0.6:
+                    risk_level = RiskLevel.MEDIUM
+                else:
+                    risk_level = RiskLevel.HIGH
+
+                risk_metrics = RiskMetrics(
+                    debt_to_assets=debt_ratio,  # 使用转换后的小数
+                    current_ratio=ratios_data.get("current_ratio", 1.5),
+                    quick_ratio=ratios_data.get("quick_ratio", 1.2),
+                    cashflow_to_income=1.1,  # 暂时保持默认值
+                    risk_level=risk_level,  # 使用动态计算的风险等级
+                    bps=bps,
+                    roe=roe  # 使用年化后的ROE（已经是小数形式）
+                )
+            else:
+                # 使用默认值
+                risk_metrics = RiskMetrics(
+                    debt_to_assets=0.5,
+                    current_ratio=1.5,
+                    quick_ratio=1.2,
+                    cashflow_to_income=1.1,
+                    risk_level=RiskLevel.MEDIUM,
+                    bps=None,
+                    roe=None
+                )
 
             # 9. 计算估值（如果存在 fcfps 则使用，否则使用 eps）
             valuation_result = self.valuation_calculator.calculate(
@@ -244,7 +282,9 @@ class MDVAESStrategy(BaseStrategy):
                 current_pe=current_pe,
                 bond_rate=bond_rate,
                 params=params,
-                fcfps=current_fcfps
+                fcfps=current_fcfps,
+                bps=bps,
+                roe=roe
             )
 
             return {

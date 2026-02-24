@@ -297,10 +297,8 @@ class MDVAESDataReader:
                 f"建议：补充历史数据或使用分析师预测。"
             )
 
-        # 使用年化后的 EPS 进行计算
+        # 使用年化后的 EPS 进行外推计算
         latest_eps = historical_eps[0]["annualized_eps"]
-        oldest_eps = historical_eps[-1]["annualized_eps"]
-        n_years = len(historical_eps)
 
         # 计算历史增长率，处理负EPS的情况
         growth_rate = self._calculate_growth_rate(historical_eps)
@@ -430,6 +428,125 @@ class MDVAESDataReader:
 
         # 默认无风险利率 2.75%
         return 0.0275
+
+    async def get_current_roe(self, symbol: str, calculation_date: str) -> Optional[float]:
+        """获取年化净资产收益率 ROE（异步版本，使用同比外推法）
+
+        ROE 季节性处理：
+        1. Tushare 的 ROE 是当期值（季度/半年度/全年），需要年化
+        2. 优先使用年报数据（已年化）
+        3. 如果最近一期不是年报，使用同比外推
+
+        这是 get_current_roe_sync 的异步版本。
+
+        Args:
+            symbol: 股票代码
+            calculation_date: 计算日期 (YYYY-MM-DD)
+
+        Returns:
+            年化ROE值（小数形式，如0.38表示38%），如果无法获取则返回None
+        """
+        db = get_mongo_db()
+        calculation_date_yyyymmdd = calculation_date.replace("-", "")
+
+        # 获取最近的 ROE 数据（多取几条以便同比计算）
+        roe_data_list = await db.mdvaes_financial_ratios.find({
+            "ts_code": symbol,
+            "ann_date": {"$lt": calculation_date_yyyymmdd},
+            "roe": {"$ne": None, "$exists": True}
+        }).sort("ann_date", -1).limit(20).to_list(None)
+
+        if not roe_data_list:
+            return None
+
+        # 按年分组，优先选择年报
+        yearly_reports = {}
+        for data in roe_data_list:
+            end_date_str = data.get("end_date", "")
+            if not end_date_str:
+                continue
+
+            # 解析报告期
+            if "-" in end_date_str:
+                end_date_dt = datetime.strptime(end_date_str, "%Y-%m-%d")
+            else:
+                end_date_dt = datetime.strptime(end_date_str, "%Y%m%d")
+
+            year = end_date_dt.year
+            month_day = end_date_str[-4:]
+
+            # 报告类型标识
+            report_key = "annual" if month_day == "1231" else (
+                "q2" if month_day == "0630" else
+                "q3" if month_day == "0930" else
+                "q1" if month_day == "0331" else
+                f"other_{month_day}"
+            )
+
+            if year not in yearly_reports:
+                yearly_reports[year] = {}
+            if report_key not in yearly_reports[year] or data["ann_date"] > yearly_reports[year][report_key]["ann_date"]:
+                yearly_reports[year][report_key] = data
+
+        # 获取最新一年的数据
+        years_sorted = sorted(yearly_reports.keys(), reverse=True)
+        if not years_sorted:
+            return None
+
+        latest_year = years_sorted[0]
+        latest_reports = yearly_reports[latest_year]
+
+        def _annualize_roe(roe_value: float, report_key: str) -> float:
+            """将当期ROE年化"""
+            if report_key == "annual":
+                return roe_value
+            elif report_key == "q1":
+                return roe_value * 4
+            elif report_key == "q2":
+                return roe_value * 2
+            elif report_key == "q3":
+                return roe_value * (4 / 3)
+            else:
+                return roe_value
+
+        # 优先使用年报（已经是全年值）
+        if "annual" in latest_reports:
+            annual_roe_pct = latest_reports["annual"].get("roe")
+            if annual_roe_pct is not None:
+                logger.debug(f"    📊 ROE: 使用年报数据 {annual_roe_pct:.2f}% (无需调整)")
+                return annual_roe_pct / 100.0
+
+        # 如果没有年报，使用同比外推法
+        for key in ["q3", "q2", "q1"]:
+            if key in latest_reports:
+                latest_report = latest_reports[key]
+                current_period_roe_pct = latest_report.get("roe")
+
+                if latest_year - 1 in yearly_reports and key in yearly_reports[latest_year - 1]:
+                    last_year_same_period = yearly_reports[latest_year - 1][key]
+                    last_year_period_roe_pct = last_year_same_period.get("roe")
+
+                    if "annual" in yearly_reports[latest_year - 1]:
+                        last_year_annual_roe_pct = yearly_reports[latest_year - 1]["annual"].get("roe")
+
+                        if current_period_roe_pct is not None and last_year_period_roe_pct is not None and last_year_annual_roe_pct is not None:
+                            current_annualized = _annualize_roe(current_period_roe_pct, key)
+                            last_year_period_annualized = _annualize_roe(last_year_period_roe_pct, key)
+                            growth_ratio = current_annualized / last_year_period_annualized
+                            estimated_annual_roe_pct = last_year_annual_roe_pct * growth_ratio
+
+                            logger.debug(f"    📊 ROE同比外推: {key} 当期={current_period_roe_pct:.2f}%, "
+                                       f"年化={current_annualized:.2f}%, 去年同期={last_year_period_roe_pct:.2f}%, "
+                                       f"去年年化={last_year_period_annualized:.2f}%, 增长率={growth_ratio:.2%}, "
+                                       f"预估全年={estimated_annual_roe_pct:.2f}%")
+                            return estimated_annual_roe_pct / 100.0
+
+                if current_period_roe_pct is not None:
+                    annualized_roe_pct = _annualize_roe(current_period_roe_pct, key)
+                    logger.debug(f"    📊 ROE简单年化: {key} 当期={current_period_roe_pct:.2f}%, 年化={annualized_roe_pct:.2f}%")
+                    return annualized_roe_pct / 100.0
+
+        return None
 
     async def get_financial_ratios(self, symbol: str, calculation_date: str) -> Optional[dict]:
         """获取财务比率数据
@@ -679,6 +796,142 @@ class MDVAESDataReader:
         if bond_data:
             return bond_data.get("yield", 0) / 100
         return 0.0275
+
+    def get_current_roe_sync(self, symbol: str, calculation_date: str) -> Optional[float]:
+        """获取年化净资产收益率 ROE（同步版本，使用同比外推法）
+
+        ROE 季节性处理：
+        1. Tushare 的 ROE 是当期值（季度/半年度/全年），需要年化
+        2. 优先使用年报数据（已年化）
+        3. 如果最近一期不是年报，使用同比外推：
+           - 先将当期ROE年化（Q1×4, Q2×2, Q3×4/3）
+           - 今年全年ROE预估 = 去年全年ROE × (年化后的最近季度ROE / 年化后的去年同季度ROE)
+
+        Args:
+            symbol: 股票代码
+            calculation_date: 计算日期 (YYYY-MM-DD)
+
+        Returns:
+            年化ROE值（小数形式，如0.38表示38%），如果无法获取则返回None
+        """
+        db = self._get_sync_db()
+        calculation_date_yyyymmdd = calculation_date.replace("-", "")
+
+        # 获取最近的 ROE 数据（多取几条以便同比计算）
+        roe_data_list = list(db.mdvaes_financial_ratios.find({
+            "ts_code": symbol,
+            "ann_date": {"$lt": calculation_date_yyyymmdd},
+            "roe": {"$ne": None, "$exists": True}
+        }).sort("ann_date", -1).limit(20))
+
+        if not roe_data_list:
+            return None
+
+        # 按年分组，优先选择年报
+        yearly_reports = {}
+        for data in roe_data_list:
+            end_date_str = data.get("end_date", "")
+            if not end_date_str:
+                continue
+
+            # 解析报告期
+            if "-" in end_date_str:
+                end_date_dt = datetime.strptime(end_date_str, "%Y-%m-%d")
+            else:
+                end_date_dt = datetime.strptime(end_date_str, "%Y%m%d")
+
+            year = end_date_dt.year
+            month_day = end_date_str[-4:]
+
+            # 报告类型标识
+            report_key = "annual" if month_day == "1231" else (
+                "q2" if month_day == "0630" else
+                "q3" if month_day == "0930" else
+                "q1" if month_day == "0331" else
+                f"other_{month_day}"
+            )
+
+            if year not in yearly_reports:
+                yearly_reports[year] = {}
+            if report_key not in yearly_reports[year] or data["ann_date"] > yearly_reports[year][report_key]["ann_date"]:
+                yearly_reports[year][report_key] = data
+
+        # 获取最新一年的数据
+        years_sorted = sorted(yearly_reports.keys(), reverse=True)
+        if not years_sorted:
+            return None
+
+        latest_year = years_sorted[0]
+        latest_reports = yearly_reports[latest_year]
+
+        def _annualize_roe(roe_value: float, report_key: str) -> float:
+            """将当期ROE年化
+
+            ROE是比率值：
+            - Q1 ROE需要×4（季度数据年化）
+            - Q2 ROE需要×2（半年数据年化）
+            - Q3 ROE需要×4/3（3/4年数据年化）
+            - 年报ROE不需要调整
+            """
+            if report_key == "annual":
+                return roe_value
+            elif report_key == "q1":
+                return roe_value * 4
+            elif report_key == "q2":
+                return roe_value * 2
+            elif report_key == "q3":
+                return roe_value * (4 / 3)
+            else:
+                # 其他情况，保守处理，返回原值
+                return roe_value
+
+        # 优先使用年报（已经是全年值）
+        if "annual" in latest_reports:
+            annual_roe_pct = latest_reports["annual"].get("roe")
+            if annual_roe_pct is not None:
+                logger.debug(f"    📊 ROE: 使用年报数据 {annual_roe_pct:.2f}% (无需调整)")
+                return annual_roe_pct / 100.0  # 转换为小数
+
+        # 如果没有年报，使用同比外推法
+        # 找到最新一期的报告类型
+        for key in ["q3", "q2", "q1"]:
+            if key in latest_reports:
+                latest_report = latest_reports[key]
+                current_period_roe_pct = latest_report.get("roe")
+
+                # 获取去年同期的数据
+                if latest_year - 1 in yearly_reports and key in yearly_reports[latest_year - 1]:
+                    last_year_same_period = yearly_reports[latest_year - 1][key]
+                    last_year_period_roe_pct = last_year_same_period.get("roe")
+
+                    # 获取去年年报数据作为基准
+                    if "annual" in yearly_reports[latest_year - 1]:
+                        last_year_annual_roe_pct = yearly_reports[latest_year - 1]["annual"].get("roe")
+
+                        if current_period_roe_pct is not None and last_year_period_roe_pct is not None and last_year_annual_roe_pct is not None:
+                            # 先年化当期和去年同期
+                            current_annualized = _annualize_roe(current_period_roe_pct, key)
+                            last_year_period_annualized = _annualize_roe(last_year_period_roe_pct, key)
+
+                            # 计算增长率
+                            growth_ratio = current_annualized / last_year_period_annualized
+
+                            # 同比外推
+                            estimated_annual_roe_pct = last_year_annual_roe_pct * growth_ratio
+
+                            logger.debug(f"    📊 ROE同比外推: {key} 当期={current_period_roe_pct:.2f}%, "
+                                       f"年化={current_annualized:.2f}%, 去年同期={last_year_period_roe_pct:.2f}%, "
+                                       f"去年年化={last_year_period_annualized:.2f}%, 增长率={growth_ratio:.2%}, "
+                                       f"预估全年={estimated_annual_roe_pct:.2f}%")
+                            return estimated_annual_roe_pct / 100.0  # 转换为小数
+
+                # 如果无法同比外推，简单年化处理
+                if current_period_roe_pct is not None:
+                    annualized_roe_pct = _annualize_roe(current_period_roe_pct, key)
+                    logger.debug(f"    📊 ROE简单年化: {key} 当期={current_period_roe_pct:.2f}%, 年化={annualized_roe_pct:.2f}%")
+                    return annualized_roe_pct / 100.0  # 转换为小数
+
+        return None
 
     def get_current_fcfps_sync(self, symbol: str, calculation_date: str) -> Optional[float]:
         """获取当前每股自由现金流 FCFPS（同步版本，使用同比外推法）
