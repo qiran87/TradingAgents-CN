@@ -1,11 +1,14 @@
 """MDVAES 数据读取器"""
 
+import logging
 from typing import List, Optional
 from datetime import datetime
 from app.core.database import get_mongo_db
 from app.core.config import settings
 from app.domain.mdvaes import EPSForecast
 import pymongo
+
+logger = logging.getLogger(__name__)
 
 
 class MDVAESDataReader:
@@ -678,29 +681,141 @@ class MDVAESDataReader:
         return 0.0275
 
     def get_current_fcfps_sync(self, symbol: str, calculation_date: str) -> Optional[float]:
-        """获取当前每股自由现金流 FCFPS（同步版本）
+        """获取当前每股自由现金流 FCFPS（同步版本，使用同比外推法）
 
         优先获取 fcfps（每股自由现金流），如果不存在则尝试使用 cfps（每股经营现金流）
 
-        注意：Tushare API 返回 fcfe_ps，同步服务会将其映射为 fcfps 存入数据库
+        同比外推法（与 EPS 处理逻辑一致）：
+        1. 优先使用年报数据（完整全年数据）
+        2. 如果最近一期不是年报，使用同比外推：
+           今年全年预估 = 去年全年FCF × (最近季度FCF / 去年同季度FCF)
+
+        注意：
+        - Tushare API 返回 fcfe_ps，同步服务会将其映射为 fcfps 存入数据库
+        - fcfps/cfps 是累加值，存在季节性问题，需要同比外推处理
         """
         db = self._get_sync_db()
         calculation_date_yyyymmdd = calculation_date.replace("-", "")
 
-        # 优先使用 fcfps（每股自由现金流）
-        fcf_data = db.mdvaes_eps_history.find_one({
+        # 获取最近的 fcfps 数据（多取几条以便同比计算）
+        fcf_data_list = list(db.mdvaes_eps_history.find({
             "ts_code": symbol,
             "ann_date": {"$lt": calculation_date_yyyymmdd},
-            "fcfps": {"$ne": None, "$exists": True}
-        }, sort=[("ann_date", -1)], projection=["fcfps", "cfps"])
+            "$or": [
+                {"fcfps": {"$ne": None, "$exists": True}},
+                {"cfps": {"$ne": None, "$exists": True}}
+            ]
+        }).sort("ann_date", -1).limit(20))
 
-        if fcf_data:
-            # 优先返回 fcfps
-            if "fcfps" in fcf_data and fcf_data["fcfps"] is not None:
-                return float(fcf_data["fcfps"])
-            # 如果没有 fcfps，尝试使用 cfps（每股经营现金流）作为近似
-            elif "cfps" in fcf_data and fcf_data["cfps"] is not None:
-                return float(fcf_data["cfps"])
+        if not fcf_data_list:
+            return None
 
-        # 如果数据库没有数据，返回 None（调用方需要处理）
+        # 确定使用哪个字段（优先 fcfps，否则 cfps）
+        use_fcfps = any(d.get("fcfps") is not None for d in fcf_data_list)
+        field_name = "fcfps" if use_fcfps else "cfps"
+        display_name = "每股自由现金流" if use_fcfps else "每股经营现金流"
+
+        # 过滤有效数据
+        valid_data = [d for d in fcf_data_list if d.get(field_name) is not None]
+
+        if not valid_data:
+            return None
+
+        # 按年分组，优先选择年报
+        yearly_reports = {}
+        for data in valid_data:
+            end_date_str = data.get("end_date", "")
+            if not end_date_str:
+                continue
+
+            # 解析报告期
+            if "-" in end_date_str:
+                end_date_dt = datetime.strptime(end_date_str, "%Y-%m-%d")
+            else:
+                end_date_dt = datetime.strptime(end_date_str, "%Y%m%d")
+
+            year = end_date_dt.year
+            month_day = end_date_str[-4:]
+
+            # 报告类型标识
+            report_key = "annual" if month_day == "1231" else (
+                "q2" if month_day == "0630" else
+                "q3" if month_day == "0930" else
+                "q1" if month_day == "0331" else
+                f"other_{month_day}"
+            )
+
+            if year not in yearly_reports:
+                yearly_reports[year] = {}
+            if report_key not in yearly_reports[year] or data["ann_date"] > yearly_reports[year][report_key]["ann_date"]:
+                yearly_reports[year][report_key] = data
+
+        # 获取最新一年的年度 fcfps
+        years_sorted = sorted(yearly_reports.keys(), reverse=True)
+        if not years_sorted:
+            return None
+
+        latest_year = years_sorted[0]
+        latest_reports = yearly_reports[latest_year]
+
+        # 优先使用年报
+        if "annual" in latest_reports:
+            annual_value = latest_reports["annual"].get(field_name)
+            if annual_value is not None:
+                logger.info(
+                    f"{symbol} {display_name}: 使用{latest_year}年年报 = {annual_value:.2f}"
+                )
+                return float(annual_value)
+
+        # 没有年报，使用同比外推法
+        # 找到最新一期的报告
+        latest_report = None
+        latest_key = None
+        for key in ["q3", "q2", "q1"]:
+            if key in latest_reports:
+                latest_report = latest_reports[key]
+                latest_key = key
+                break
+
+        if latest_report and latest_year - 1 in yearly_reports:
+            last_year_reports = yearly_reports[latest_year - 1]
+            if latest_key in last_year_reports:
+                last_year_same_period = last_year_reports[latest_key]
+
+                # 获取去年全年 fcfps
+                last_year_annual = None
+                if "annual" in last_year_reports:
+                    last_year_annual = last_year_reports["annual"].get(field_name)
+                else:
+                    # 去年也没有年报，保守使用当前值
+                    last_year_annual = last_year_same_period.get(field_name)
+
+                if last_year_annual is not None:
+                    current_period_value = latest_report.get(field_name, 0)
+                    last_year_period_value = last_year_same_period.get(field_name, 0)
+
+                    # 同比外推计算
+                    if last_year_period_value != 0:
+                        growth_ratio = current_period_value / last_year_period_value
+                        annualized_value = last_year_annual * growth_ratio
+                    else:
+                        # 去年同期为0，保守使用当前值
+                        annualized_value = current_period_value
+
+                    report_type_map = {"q1": "一季报", "q2": "半年报", "q3": "三季报"}
+                    logger.info(
+                        f"{symbol} {display_name}: {latest_year}年{report_type_map.get(latest_key, latest_key)}同比外推 | "
+                        f"当前={current_period_value:.2f}, 去年同期={last_year_period_value:.2f}, "
+                        f"去年全年={last_year_annual:.2f}, 预估全年={annualized_value:.2f}"
+                    )
+                    return float(annualized_value)
+
+        # 降级：直接使用最新值
+        latest_value = valid_data[0].get(field_name)
+        if latest_value is not None:
+            logger.warning(
+                f"{symbol} {display_name}: 无法进行同比外推，使用最新季度值 = {latest_value:.2f}"
+            )
+            return float(latest_value)
+
         return None
