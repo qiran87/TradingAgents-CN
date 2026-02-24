@@ -54,6 +54,7 @@ class EPSForecastResponse(BaseModel):
     forecast_date: str
     analyst_count: int
     source: str
+    ann_date: Optional[str] = None  # 外推时使用的历史数据公告日期
 
 
 class GrowthMetricsResponse(BaseModel):

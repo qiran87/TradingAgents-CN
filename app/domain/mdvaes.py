@@ -35,6 +35,7 @@ class EPSForecast:
     forecast_date: str
     analyst_count: int
     source: str  # "analyst" or "historical_extrapolation"
+    ann_date: Optional[str] = None  # 外推时使用的历史数据公告日期（YYYY-MM-DD）
 
 
 @dataclass(frozen=True)

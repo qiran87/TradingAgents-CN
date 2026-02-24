@@ -242,12 +242,26 @@ def run_single_backtest(
 
         print(f"\n✅ EPS预测来源: {eps_forecasts[0].source}")
         print(f"预测年数: {len(eps_forecasts)} 年")
-        print("\n各年度EPS预测:")
-        print(f"{'年份':<8} {'EPS预测':<15} {'预测日期':<15} {'来源':<20}")
-        print("-" * 60)
+
+        # 根据来源调整表头
+        is_extrapolation = eps_forecasts[0].source == "historical_extrapolation"
+        if is_extrapolation:
+            print("\n各年度EPS预测 (历史外推):")
+            print(f"{'年份':<8} {'EPS预测':<15} {'预测日期':<15} {'公告日期':<15} {'来源':<20}")
+            print("-" * 75)
+        else:
+            print("\n各年度EPS预测 (分析师预测):")
+            print(f"{'年份':<8} {'EPS预测':<15} {'预测日期':<15} {'来源':<20}")
+            print("-" * 60)
+
         for forecast in eps_forecasts:
             source_str = "分析师预测" if forecast.source == "analyst" else "历史外推"
-            print(f"{forecast.year:<8} {forecast.eps_forecast:<15.4f} {forecast.forecast_date:<15} {source_str:<20}")
+            if is_extrapolation and forecast.ann_date:
+                print(f"{forecast.year:<8} {forecast.eps_forecast:<15.4f} {forecast.forecast_date:<15} {forecast.ann_date:<15} {source_str:<20}")
+            elif is_extrapolation:
+                print(f"{forecast.year:<8} {forecast.eps_forecast:<15.4f} {forecast.forecast_date:<15} {'(无)':<15} {source_str:<20}")
+            else:
+                print(f"{forecast.year:<8} {forecast.eps_forecast:<15.4f} {forecast.forecast_date:<15} {source_str:<20}")
 
         current_eps = eps_forecasts[0].eps_forecast
         print(f"\n📊 当前EPS (第{eps_forecasts[0].year}年): {current_eps:.4f}")

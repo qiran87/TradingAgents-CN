@@ -291,7 +291,8 @@ class MDVAESService:
             eps_forecast=eps.eps_forecast,
             forecast_date=eps.forecast_date,
             analyst_count=eps.analyst_count,
-            source=eps.source
+            source=eps.source,
+            ann_date=eps.ann_date  # 添加公告日期
         )
 
 
