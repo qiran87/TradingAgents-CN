@@ -85,6 +85,9 @@ def get_current_price(db, symbol: str, calculation_date: str) -> float:
     """
     calculation_date_yyyymmdd = calculation_date.replace("-", "")
 
+    # 注意：数据库中的 trade_date 格式是 YYYY-MM-DD（如 "2023-08-03"）
+    # 所以应该直接使用 calculation_date 而不是 calculation_date_yyyymmdd 进行查询
+
     # 提取 symbol（纯数字代码）
     symbol_value = extract_symbol(symbol)
 
@@ -92,15 +95,16 @@ def get_current_price(db, symbol: str, calculation_date: str) -> float:
     print(f"    🔍 正在从数据库查询价格...")
     print(f"    📋 MongoDB 请求参数:")
     print(f"       - 计算日期: {calculation_date} (YYYY-MM-DD)")
-    print(f"       - 查询截止日期: < {calculation_date_yyyymmdd} (YYYYMMDD)")
+    print(f"       - 查询截止日期: < {calculation_date} (YYYY-MM-DD，与数据库格式一致)")
     print(f"       - 原始股票代码: {symbol}")
     print(f"       - 提取 symbol: {symbol_value}")
 
     try:
         # 构建查询条件 - 只使用 symbol 字段
+        # 注意：数据库中的 trade_date 是 YYYY-MM-DD 格式，所以直接使用 calculation_date
         match_condition = {
             "symbol": symbol_value,
-            "trade_date": {"$lt": calculation_date_yyyymmdd}
+            "trade_date": {"$lt": calculation_date}
         }
 
         pipeline = [
@@ -558,15 +562,15 @@ def run_single_backtest(
         print(f"     = {current_eps:.4f} × 1.5")
         print(f"     = {pb_valuation:.2f} 元")
 
-    # 7.4 DCF估值 (使用 ValuationCalculator)
+    # 7.4 DCF估值（优先使用 fcfps，fcfps 为负时使用 BPS×0.8）
     print_subsection("7.4 DCF估值")
 
-    # 根据是否有 FCFPS 决定计算方式
+    bps = risk_metrics.bps
+
+    # 优先使用 fcfps 进行 DCF 估值
     if current_fcfps is not None and current_fcfps > 0:
         print(f"🎯 使用每股自由现金流 (FCFPS) 进行 DCF 估值")
-        dcf_base = current_fcfps
-        dcf_base_name = "FCFPS"
-        # 使用 ValuationCalculator 的 FCFPS DCF 方法
+        print(f"   FCFPS: {current_fcfps:.2f} 元/股")
         dcf_valuation = ValuationCalculator._calc_dcf_valuation_fcfps(
             fcfps=current_fcfps,
             growth_rate=growth_metrics.growth_rate,
@@ -574,47 +578,37 @@ def run_single_backtest(
             params=params
         )
     else:
-        print(f"⚠️ 无 FCFPS 数据，使用每股收益 (EPS) 进行 DCF 估值")
-        dcf_base = current_eps
-        dcf_base_name = "EPS"
-        # 使用 ValuationCalculator 的 EPS DCF 方法
-        dcf_valuation = ValuationCalculator._calc_dcf_valuation(
-            eps=current_eps,
-            growth_rate=growth_metrics.growth_rate,
-            discount_rate=bond_rate,
-            params=params
-        )
+        # fcfps 为负数或不存在，使用 BPS × 0.8 方式
+        if current_fcfps is not None and current_fcfps <= 0:
+            print(f"⚠️ FCFPS 为负 ({current_fcfps:.2f})，改用每股净资产 (BPS) 进行 DCF 估值")
+        else:
+            print(f"⚠️ 无 FCFPS 数据，使用每股净资产 (BPS) 进行 DCF 估值")
+
+        if bps is not None and bps > 0:
+            print(f"   BPS: {bps:.2f} 元/股")
+            print(f"   折扣系数: 0.8")
+            dcf_valuation = ValuationCalculator._calc_dcf_valuation(
+                eps=current_eps,
+                growth_rate=growth_metrics.growth_rate,
+                discount_rate=bond_rate,
+                params=params,
+                bps=bps
+            )
+            print(f"   DCF估值 = BPS × 0.8 = {bps:.2f} × 0.8 = {dcf_valuation:.2f} 元")
+        else:
+            print(f"⚠️ 无 BPS 数据或 BPS 为负，DCF 估值 = 0")
+            dcf_valuation = ValuationCalculator._calc_dcf_valuation(
+                eps=current_eps,
+                growth_rate=growth_metrics.growth_rate,
+                discount_rate=bond_rate,
+                params=params,
+                bps=bps
+            )
+            print(f"   DCF估值 = {dcf_valuation:.2f} 元")
 
     # 打印详细计算过程（与 ValuationCalculator 保持一致）
-    terminal_growth = 0.03
-    required_return = bond_rate + 0.05
-    adj_growth_rate = min(growth_metrics.growth_rate, required_return - 0.01)
-
-    print(f"终值增长率: {terminal_growth:.2%}")
-    print(f"必要回报率: 无风险利率({bond_rate:.2%}) + 5% = {required_return:.2%}")
-    print(f"调整后增长率: {adj_growth_rate:.2%}")
-    print(f"基础数据: {dcf_base_name} = {dcf_base:.4f} 元")
-
-    forecast_values = []
-    print(f"\n未来{forecast_years}年{dcf_base_name}预测及折现:")
-    print(f"{'年份':<8} {'预测' + dcf_base_name:<15} {'折现因子':<15} {'折现值':<15}")
-    print("-" * 50)
-
-    for i in range(1, forecast_years + 1):
-        forecast_value = dcf_base * ((1 + adj_growth_rate) ** i)
-        discount_factor = (1 + required_return) ** i
-        discounted_value = forecast_value / discount_factor
-        forecast_values.append(discounted_value)
-        print(f"第{i}年    {forecast_value:<15.4f} {discount_factor:<15.4f} {discounted_value:<15.4f}")
-
-    # 终值
-    terminal_base = dcf_base * ((1 + adj_growth_rate) ** forecast_years)
-    terminal_value = terminal_base * (1 + terminal_growth) / (required_return - terminal_growth)
-    discounted_terminal = terminal_value / ((1 + required_return) ** forecast_years)
-    print(f"终值      -              -              {discounted_terminal:<15.4f}")
-
-    print(f"\nDCF估值 = Σ折现值 + 折现终值 = {dcf_valuation:.2f} 元")
-    print(f"         (使用 ValuationCalculator 计算结果)")
+    # 新逻辑：使用 BPS × 0.8，不需要详细计算步骤
+    # (旧逻辑的详细计算步骤已删除)
 
     # 7.5 多锚点加权
     print_subsection("7.5 多锚点加权估值")

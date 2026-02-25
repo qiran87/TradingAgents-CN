@@ -782,7 +782,7 @@ const form = ref({
   stock_code: '000001.SZ',
   start_date: '',
   end_date: '',
-  initial_capital: 200000,  // 提高默认初始资金以支持高价股（如茅台）
+  initial_capital: 1000000,  // 提高默认初始资金以支持高价股（如茅台）
   min_purchase: 100,
   strategy_id: '',
   strategy_params: {},
@@ -877,7 +877,7 @@ const strategies = ref([
         name: 'margin_sell',
         label: '卖出阈值比例',
         type: 'number',
-        min: 1.05,
+        min: 1.0,
         max: 2.0,
         step: 0.05,
         default: 1.2,

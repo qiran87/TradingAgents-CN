@@ -525,6 +525,49 @@
             </el-descriptions-item>
           </el-descriptions>
 
+          <!-- 参数配置 -->
+          <el-descriptions
+            v-if="historyStore.recordDetail.history.parameters.strategy_id === 'mdvaes'"
+            title="MDVAES策略参数配置"
+            :column="2"
+            border
+            style="margin-top: 20px"
+          >
+            <!-- 多锚点权重配置 -->
+            <el-descriptions-item label="PEG估值权重">
+              {{ (historyStore.recordDetail.history.parameters.strategy_params?.anchor_weight?.peg * 100).toFixed(1) }}%
+            </el-descriptions-item>
+            <el-descriptions-item label="PE估值权重">
+              {{ (historyStore.recordDetail.history.parameters.strategy_params?.anchor_weight?.pe_historical * 100).toFixed(1) }}%
+            </el-descriptions-item>
+            <el-descriptions-item label="PB估值权重">
+              {{ (historyStore.recordDetail.history.parameters.strategy_params?.anchor_weight?.pb * 100).toFixed(1) }}%
+            </el-descriptions-item>
+            <el-descriptions-item label="DCF估值权重">
+              {{ (historyStore.recordDetail.history.parameters.strategy_params?.anchor_weight?.dcf * 100).toFixed(1) }}%
+            </el-descriptions-item>
+
+            <!-- 其他估值参数 -->
+            <el-descriptions-item label="EPS预测年数">
+              {{ historyStore.recordDetail.history.parameters.strategy_params?.forecast_years || 5 }} 年
+            </el-descriptions-item>
+            <el-descriptions-item label="PEG基数">
+              {{ historyStore.recordDetail.history.parameters.strategy_params?.peg_base || 1.0 }}
+            </el-descriptions-item>
+            <el-descriptions-item label="风险调整幅度">
+              {{ (historyStore.recordDetail.history.parameters.strategy_params?.risk_adjustment * 100).toFixed(1) }}%
+            </el-descriptions-item>
+            <el-descriptions-item label="交易模式">
+              {{ historyStore.recordDetail.history.parameters.strategy_params?.use_margin ? '安全边际模式' : '估值区间模式' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="买入阈值">
+              {{ historyStore.recordDetail.history.parameters.strategy_params?.margin_buy ? (historyStore.recordDetail.history.parameters.strategy_params.margin_buy * 100).toFixed(1) + '%' : '-' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="卖出阈值">
+              {{ historyStore.recordDetail.history.parameters.strategy_params?.margin_sell ? (historyStore.recordDetail.history.parameters.strategy_params.margin_sell * 100).toFixed(1) + '%' : '-' }}
+            </el-descriptions-item>
+          </el-descriptions>
+
           <!-- 回测结果 -->
           <BacktestResults
             v-if="historyStore.recordDetail.results"

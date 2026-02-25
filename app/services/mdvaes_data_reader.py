@@ -754,20 +754,132 @@ class MDVAESDataReader:
                             "yoy_growth": growth_ratio if last_year_period_eps != 0 else None
                         })
                     else:
-                        yearly_data.append({
-                            **latest_report,
-                            "annualized_eps": latest_report["eps"],
-                            "report_type": f"{latest_key}(无同比)",
-                            "is_annual": False
-                        })
+                        # 同比外推失败：基于过去5年年报增长曲线估算今年的年报值
+                        # 收集历史年报数据（按年份倒序）
+                        annual_eps_list = []
+                        for y in years_sorted:
+                            if y != year and "annual" in yearly_reports[y]:
+                                annual_eps_list.append({
+                                    "year": y,
+                                    "eps": yearly_reports[y]["annual"]["eps"]
+                                })
+                                if len(annual_eps_list) >= 5:  # 最多取5年
+                                    break
+
+                        if len(annual_eps_list) >= 2:
+                            # 使用 CAGR 估算今年的年报值
+                            latest_annual = annual_eps_list[0]
+                            oldest_annual = annual_eps_list[-1]
+                            n_years = latest_annual["year"] - oldest_annual["year"]
+
+                            if n_years > 0 and oldest_annual["eps"] > 0:
+                                # 计算 CAGR: (最新/最旧)^(1/n) - 1
+                                cagr = (latest_annual["eps"] / oldest_annual["eps"]) ** (1 / n_years) - 1
+                                # 估算今年的年报值 = 最新年报 × (1 + CAGR)
+                                estimated_annual_eps = latest_annual["eps"] * (1 + cagr)
+
+                                yearly_data.append({
+                                    **latest_report,
+                                    "annualized_eps": estimated_annual_eps,
+                                    "report_type": f"{latest_key}(年报CAGR估算,{latest_annual['year']}-{oldest_annual['year']})",
+                                    "is_annual": True,
+                                    "cagr": cagr,
+                                    "fallback_years": f"{oldest_annual['year']}-{latest_annual['year']}"
+                                })
+                                logger.debug(
+                                    f"{symbol}: 同比外推失败，基于{oldest_annual['year']}-{latest_annual['year']}年年报CAGR({cagr:.2%})估算今年年报 = {estimated_annual_eps:.4f}"
+                                )
+                            else:
+                                # 无法计算 CAGR，使用最近一期年报作为兜底
+                                yearly_data.append({
+                                    **latest_report,
+                                    "annualized_eps": latest_annual["eps"],
+                                    "report_type": f"{latest_key}(使用{latest_annual['year']}年报)",
+                                    "is_annual": True,
+                                    "fallback_year": latest_annual["year"]
+                                })
+                        elif len(annual_eps_list) == 1:
+                            # 只有1年年报数据，直接使用
+                            latest_annual = annual_eps_list[0]
+                            yearly_data.append({
+                                **latest_report,
+                                "annualized_eps": latest_annual["eps"],
+                                "report_type": f"{latest_key}(使用{latest_annual['year']}年报)",
+                                "is_annual": True,
+                                "fallback_year": latest_annual["year"]
+                            })
+                        else:
+                            # 没有任何年报数据，直接使用当期季度值（最后兜底）
+                            yearly_data.append({
+                                **latest_report,
+                                "annualized_eps": latest_report["eps"],
+                                "report_type": f"{latest_key}(无年报)",
+                                "is_annual": False
+                            })
                 else:
                     if latest_report:
-                        yearly_data.append({
-                            **latest_report,
-                            "annualized_eps": latest_report["eps"],
-                            "report_type": "数据不完整",
-                            "is_annual": False
-                        })
+                        # 数据不完整：基于过去5年年报增长曲线估算今年的年报值
+                        # 收集历史年报数据（按年份倒序）
+                        annual_eps_list = []
+                        for y in years_sorted:
+                            if y != year and "annual" in yearly_reports[y]:
+                                annual_eps_list.append({
+                                    "year": y,
+                                    "eps": yearly_reports[y]["annual"]["eps"]
+                                })
+                                if len(annual_eps_list) >= 5:  # 最多取5年
+                                    break
+
+                        if len(annual_eps_list) >= 2:
+                            # 使用 CAGR 估算今年的年报值
+                            latest_annual = annual_eps_list[0]
+                            oldest_annual = annual_eps_list[-1]
+                            n_years = latest_annual["year"] - oldest_annual["year"]
+
+                            if n_years > 0 and oldest_annual["eps"] > 0:
+                                # 计算 CAGR: (最新/最旧)^(1/n) - 1
+                                cagr = (latest_annual["eps"] / oldest_annual["eps"]) ** (1 / n_years) - 1
+                                # 估算今年的年报值 = 最新年报 × (1 + CAGR)
+                                estimated_annual_eps = latest_annual["eps"] * (1 + cagr)
+
+                                yearly_data.append({
+                                    **latest_report,
+                                    "annualized_eps": estimated_annual_eps,
+                                    "report_type": f"年报CAGR估算({latest_annual['year']}-{oldest_annual['year']})",
+                                    "is_annual": True,
+                                    "cagr": cagr,
+                                    "fallback_years": f"{oldest_annual['year']}-{latest_annual['year']}"
+                                })
+                                logger.debug(
+                                    f"{symbol}: 数据不完整，基于{oldest_annual['year']}-{latest_annual['year']}年年报CAGR({cagr:.2%})估算今年年报 = {estimated_annual_eps:.4f}"
+                                )
+                            else:
+                                # 无法计算 CAGR，使用最近一期年报作为兜底
+                                yearly_data.append({
+                                    **latest_report,
+                                    "annualized_eps": latest_annual["eps"],
+                                    "report_type": f"使用{latest_annual['year']}年报",
+                                    "is_annual": True,
+                                    "fallback_year": latest_annual["year"]
+                                })
+                        elif len(annual_eps_list) == 1:
+                            # 只有1年年报数据，直接使用
+                            latest_annual = annual_eps_list[0]
+                            yearly_data.append({
+                                **latest_report,
+                                "annualized_eps": latest_annual["eps"],
+                                "report_type": f"使用{latest_annual['year']}年报",
+                                "is_annual": True,
+                                "fallback_year": latest_annual["year"]
+                            })
+                        else:
+                            # 没有任何年报数据，直接使用当期季度值（最后兜底）
+                            yearly_data.append({
+                                **latest_report,
+                                "annualized_eps": latest_report["eps"],
+                                "report_type": "数据不完整",
+                                "is_annual": False
+                            })
 
         return yearly_data[:limit]
 
@@ -925,27 +1037,69 @@ class MDVAESDataReader:
                                        f"预估全年={estimated_annual_roe_pct:.2f}%")
                             return estimated_annual_roe_pct / 100.0  # 转换为小数
 
-                # 如果无法同比外推，简单年化处理
-                if current_period_roe_pct is not None:
-                    annualized_roe_pct = _annualize_roe(current_period_roe_pct, key)
-                    logger.debug(f"    📊 ROE简单年化: {key} 当期={current_period_roe_pct:.2f}%, 年化={annualized_roe_pct:.2f}%")
-                    return annualized_roe_pct / 100.0  # 转换为小数
+                # 如果无法同比外推，使用 CAGR 基于历史年报估算
+                # 收集历史年报数据（按年份倒序）
+                annual_roe_list = []
+                for y in years_sorted[1:]:  # 跳过当前年份
+                    if "annual" in yearly_reports[y]:
+                        annual_roe = yearly_reports[y]["annual"].get("roe")
+                        if annual_roe is not None:
+                            annual_roe_list.append({"year": y, "roe": annual_roe})
+                            if len(annual_roe_list) >= 5:  # 最多取5年
+                                break
+
+                if len(annual_roe_list) >= 2:
+                    # 使用 CAGR 估算今年的年报 ROE
+                    latest_annual = annual_roe_list[0]
+                    oldest_annual = annual_roe_list[-1]
+                    n_years = latest_annual["year"] - oldest_annual["year"]
+
+                    if n_years > 0 and oldest_annual["roe"] > 0:
+                        # 计算 CAGR: (最新/最旧)^(1/n) - 1
+                        cagr = (latest_annual["roe"] / oldest_annual["roe"]) ** (1 / n_years) - 1
+                        # 估算今年的年报 ROE = 最新年报 ROE × (1 + CAGR)
+                        estimated_annual_roe_pct = latest_annual["roe"] * (1 + cagr)
+
+                        logger.debug(
+                            f"    📊 ROE同比外推失败，基于{oldest_annual['year']}-{latest_annual['year']}年年报CAGR({cagr:.2%})估算今年年报ROE = {estimated_annual_roe_pct:.2f}%"
+                        )
+                        return estimated_annual_roe_pct / 100.0  # 转换为小数
+                    else:
+                        # 无法计算 CAGR，使用最近一期年报
+                        latest_annual_roe_pct = annual_roe_list[0]["roe"]
+                        logger.debug(f"    📊 ROE使用最近年报({annual_roe_list[0]['year']}年) = {latest_annual_roe_pct:.2f}%")
+                        return latest_annual_roe_pct / 100.0  # 转换为小数
+                elif len(annual_roe_list) == 1:
+                    # 只有1年年报数据，直接使用
+                    latest_annual_roe_pct = annual_roe_list[0]["roe"]
+                    logger.debug(f"    📊 ROE使用最近年报({annual_roe_list[0]['year']}年) = {latest_annual_roe_pct:.2f}%")
+                    return latest_annual_roe_pct / 100.0  # 转换为小数
+                else:
+                    # 没有任何年报数据，简单年化处理（最后兜底）
+                    if current_period_roe_pct is not None:
+                        annualized_roe_pct = _annualize_roe(current_period_roe_pct, key)
+                        logger.debug(f"    📊 ROE无年报数据，简单年化: {key} 当期={current_period_roe_pct:.2f}%, 年化={annualized_roe_pct:.2f}%")
+                        return annualized_roe_pct / 100.0  # 转换为小数
 
         return None
 
     def get_current_fcfps_sync(self, symbol: str, calculation_date: str) -> Optional[float]:
-        """获取当前每股自由现金流 FCFPS（同步版本，使用同比外推法）
+        """获取当前每股自由现金流 FCFPS（同步版本）
 
         优先获取 fcfps（每股自由现金流），如果不存在则尝试使用 cfps（每股经营现金流）
 
-        同比外推法（与 EPS 处理逻辑一致）：
-        1. 优先使用年报数据（完整全年数据）
-        2. 如果最近一期不是年报，使用同比外推：
+        新逻辑（优先使用最近一次财报）：
+        1. 如果最近一次财报是年报，则直接使用年报
+        2. 如果最近财报不是年报，则使用同比外推法
+        3. 如果外推失败，兜底用最近一次年报
+
+        同比外推法：
            今年全年预估 = 去年全年FCF × (最近季度FCF / 去年同季度FCF)
 
         注意：
         - Tushare API 返回 fcfe_ps，同步服务会将其映射为 fcfps 存入数据库
         - fcfps/cfps 是累加值，存在季节性问题，需要同比外推处理
+        - 同比外推不再限制 FCFPS 必须为正数
         """
         db = self._get_sync_db()
         calculation_date_yyyymmdd = calculation_date.replace("-", "")
@@ -974,7 +1128,7 @@ class MDVAESDataReader:
         if not valid_data:
             return None
 
-        # 按年分组，优先选择年报
+        # 按年分组以便后续查找
         yearly_reports = {}
         for data in valid_data:
             end_date_str = data.get("end_date", "")
@@ -1000,74 +1154,121 @@ class MDVAESDataReader:
 
             if year not in yearly_reports:
                 yearly_reports[year] = {}
+            # 保留每个报告期的最新数据
             if report_key not in yearly_reports[year] or data["ann_date"] > yearly_reports[year][report_key]["ann_date"]:
                 yearly_reports[year][report_key] = data
 
-        # 获取最新一年的年度 fcfps
-        years_sorted = sorted(yearly_reports.keys(), reverse=True)
-        if not years_sorted:
-            return None
+        # ==================== 新逻辑开始 ====================
 
-        latest_year = years_sorted[0]
-        latest_reports = yearly_reports[latest_year]
+        # 1. 获取最近一次财报（valid_data 已按 ann_date 倒序排列）
+        latest_report = valid_data[0]
+        latest_end_date = latest_report.get("end_date", "")
+        latest_is_annual = latest_end_date.endswith("1231")
 
-        # 优先使用年报
-        if "annual" in latest_reports:
-            annual_value = latest_reports["annual"].get(field_name)
-            if annual_value is not None:
+        # 获取最近一次财报的值
+        latest_value = latest_report.get(field_name)
+
+        # 2. 如果最近一次财报是年报，则直接使用年报
+        if latest_is_annual:
+            if latest_value is not None:
+                year = datetime.strptime(latest_end_date, "%Y%m%d").year
                 logger.info(
-                    f"{symbol} {display_name}: 使用{latest_year}年年报 = {annual_value:.2f}"
+                    f"{symbol} {display_name}: 最近财报为{year}年年报，直接使用 = {latest_value:.2f}"
                 )
-                return float(annual_value)
+                return float(latest_value)
+            else:
+                # 年报没有该字段，继续尝试其他逻辑
+                pass
 
-        # 没有年报，使用同比外推法
-        # 找到最新一期的报告
-        latest_report = None
-        latest_key = None
-        for key in ["q3", "q2", "q1"]:
-            if key in latest_reports:
-                latest_report = latest_reports[key]
-                latest_key = key
-                break
+        # 3. 如果最近财报不是年报，则使用同比外推法
+        if latest_value is not None:
+            # 解析最新报告的年份和季度
+            latest_end_date_dt = datetime.strptime(latest_end_date, "%Y%m%d")
+            latest_year = latest_end_date_dt.year
+            latest_month_day = latest_end_date[-4:]
+            latest_report_key = "q2" if latest_month_day == "0630" else (
+                "q3" if latest_month_day == "0930" else
+                "q1" if latest_month_day == "0331" else "other"
+            )
 
-        if latest_report and latest_year - 1 in yearly_reports:
-            last_year_reports = yearly_reports[latest_year - 1]
-            if latest_key in last_year_reports:
-                last_year_same_period = last_year_reports[latest_key]
+            # 检查去年是否有同期数据和年报
+            if latest_year - 1 in yearly_reports:
+                last_year_reports = yearly_reports[latest_year - 1]
 
-                # 获取去年全年 fcfps
-                last_year_annual = None
-                if "annual" in last_year_reports:
-                    last_year_annual = last_year_reports["annual"].get(field_name)
-                else:
-                    # 去年也没有年报，保守使用当前值
-                    last_year_annual = last_year_same_period.get(field_name)
+                # 去年同期
+                if latest_report_key in last_year_reports:
+                    last_year_same_period = last_year_reports[latest_report_key]
+                    last_year_period_value = last_year_same_period.get(field_name)
 
-                if last_year_annual is not None:
-                    current_period_value = latest_report.get(field_name, 0)
-                    last_year_period_value = last_year_same_period.get(field_name, 0)
+                    # 去年全年
+                    last_year_annual = None
+                    if "annual" in last_year_reports:
+                        last_year_annual = last_year_reports["annual"].get(field_name)
 
-                    # 同比外推计算
-                    if last_year_period_value != 0:
-                        growth_ratio = current_period_value / last_year_period_value
+                    # 执行同比外推（需要去年同期数据且不为0）
+                    if last_year_period_value is not None and last_year_period_value != 0 and last_year_annual is not None:
+                        growth_ratio = latest_value / last_year_period_value
                         annualized_value = last_year_annual * growth_ratio
-                    else:
-                        # 去年同期为0，保守使用当前值
-                        annualized_value = current_period_value
 
-                    report_type_map = {"q1": "一季报", "q2": "半年报", "q3": "三季报"}
-                    logger.info(
-                        f"{symbol} {display_name}: {latest_year}年{report_type_map.get(latest_key, latest_key)}同比外推 | "
-                        f"当前={current_period_value:.2f}, 去年同期={last_year_period_value:.2f}, "
-                        f"去年全年={last_year_annual:.2f}, 预估全年={annualized_value:.2f}"
-                    )
-                    return float(annualized_value)
+                        logger.info(
+                            f"{symbol} {display_name}: 最近财报非年报，同比外推 | "
+                            f"当前={latest_value:.2f}, 去年同期={last_year_period_value:.2f}, "
+                            f"去年全年={last_year_annual:.2f}, 预估全年={annualized_value:.2f}"
+                        )
+                        return float(annualized_value)
 
-        # 降级：直接使用最新值
-        latest_value = valid_data[0].get(field_name)
+        # 4. 外推失败，使用 CAGR 基于历史年报估算
+        # 收集历史年报数据（按年份倒序）
+        annual_value_list = []
+        years_sorted = sorted(yearly_reports.keys(), reverse=True)
+        current_year = datetime.strptime(latest_end_date, "%Y%m%d").year
+
+        for y in years_sorted:
+            if y != current_year and "annual" in yearly_reports[y]:
+                annual_report = yearly_reports[y]["annual"]
+                annual_value = annual_report.get(field_name)
+                if annual_value is not None:
+                    annual_value_list.append({"year": y, "value": annual_value})
+                    if len(annual_value_list) >= 5:  # 最多取5年
+                        break
+
+        if len(annual_value_list) >= 2:
+            # 使用 CAGR 估算今年的年报值
+            latest_annual = annual_value_list[0]
+            oldest_annual = annual_value_list[-1]
+            n_years = latest_annual["year"] - oldest_annual["year"]
+
+            if n_years > 0 and oldest_annual["value"] > 0:
+                # 计算 CAGR: (最新/最旧)^(1/n) - 1
+                cagr = (latest_annual["value"] / oldest_annual["value"]) ** (1 / n_years) - 1
+                # 估算今年的年报值 = 最新年报 × (1 + CAGR)
+                estimated_annual_value = latest_annual["value"] * (1 + cagr)
+
+                logger.info(
+                    f"{symbol} {display_name}: 同比外推失败，基于{oldest_annual['year']}-{latest_annual['year']}年年报CAGR({cagr:.2%})估算今年年报 = {estimated_annual_value:.2f}"
+                )
+                return float(estimated_annual_value)
+            else:
+                # 无法计算 CAGR，使用最近一期年报
+                latest_annual_value = annual_value_list[0]["value"]
+                latest_annual_year = annual_value_list[0]["year"]
+                logger.info(
+                    f"{symbol} {display_name}: 无法计算CAGR，使用最近年报({latest_annual_year}年) = {latest_annual_value:.2f}"
+                )
+                return float(latest_annual_value)
+        elif len(annual_value_list) == 1:
+            # 只有1年年报数据，直接使用
+            latest_annual_value = annual_value_list[0]["value"]
+            latest_annual_year = annual_value_list[0]["year"]
+            logger.info(
+                f"{symbol} {display_name}: 同比外推失败，使用最近年报({latest_annual_year}年) = {latest_annual_value:.2f}"
+            )
+            return float(latest_annual_value)
+
+        # 5. 最终降级：直接使用最新值
         if latest_value is not None:
             logger.warning(
-                f"{symbol} {display_name}: 无法进行同比外推，使用最新季度值 = {latest_value:.2f}"
+                f"{symbol} {display_name}: 无法找到年报，使用最新财报值 = {latest_value:.2f}"
             )
             return float(latest_value)
 

@@ -57,14 +57,16 @@ class ValuationCalculator:
             # 降级：使用简化版本（基于 EPS）
             pb_valuation = eps * 1.5
 
-        # 4. DCF 估值（优先使用 fcfps，否则使用 eps）
+        # 4. DCF 估值（优先使用 fcfps，只有 fcfps 为负时才使用 BPS×0.8）
         if fcfps is not None and fcfps > 0:
+            # 优先使用 fcfps 进行 DCF 估值
             dcf_valuation = ValuationCalculator._calc_dcf_valuation_fcfps(
                 fcfps, growth_metrics.growth_rate, bond_rate, params
             )
         else:
+            # fcfps 为负数或不存在，使用 BPS × 0.8 方式
             dcf_valuation = ValuationCalculator._calc_dcf_valuation(
-                eps, growth_metrics.growth_rate, bond_rate, params
+                eps, growth_metrics.growth_rate, bond_rate, params, bps=actual_bps
             )
 
         # 5. 多锚点加权
@@ -128,26 +130,28 @@ class ValuationCalculator:
         return max(pe_historical_valuation, 0)
 
     @staticmethod
-    def _calc_dcf_valuation(eps: float, growth_rate: float, discount_rate: float, params: MDVAESParams) -> float:
-        """简化 DCF 估值"""
-        terminal_growth = 0.03
-        required_return = discount_rate + 0.05
+    def _calc_dcf_valuation(eps: float, growth_rate: float, discount_rate: float, params: MDVAESParams, bps: float = None) -> float:
+        """简化 DCF 估值 - 降级方法（当 fcfps 为负时使用）
 
-        if growth_rate >= required_return:
-            growth_rate = required_return - 0.01
+        使用每股净资产 × 0.8 的简化方式
 
-        forecast_values = []
-        for i in range(1, params.forecast_years + 1):
-            forecast_eps = eps * ((1 + growth_rate) ** i)
-            discounted_value = forecast_eps / ((1 + required_return) ** i)
-            forecast_values.append(discounted_value)
+        Args:
+            eps: 每股收益（保留兼容性，当前不使用）
+            growth_rate: 增长率（保留兼容性，当前不使用）
+            discount_rate: 折现率（保留兼容性，当前不使用）
+            params: MDVAES 参数（保留兼容性，当前不使用）
+            bps: 每股净资产
 
-        terminal_eps = eps * ((1 + growth_rate) ** params.forecast_years)
-        terminal_value = terminal_eps * (1 + terminal_growth) / (required_return - terminal_growth)
-        discounted_terminal = terminal_value / ((1 + required_return) ** params.forecast_years)
+        Returns:
+            DCF 估值结果 = bps × 0.8，如果 bps 为负或不存在则返回 0
+        """
+        # 使用每股净资产 × 0.8 进行折算
+        if bps is not None and bps > 0:
+            dcf_valuation = bps * 0.8
+            return dcf_valuation
 
-        dcf_valuation = sum(forecast_values) + discounted_terminal
-        return max(dcf_valuation, 0)
+        # 如果每股净资产为负数或不存在，返回 0
+        return 0
 
     @staticmethod
     def _calc_dcf_valuation_fcfps(fcfps: float, growth_rate: float, discount_rate: float, params: MDVAESParams) -> float:
