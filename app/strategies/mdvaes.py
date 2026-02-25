@@ -373,6 +373,18 @@ class MDVAESStrategy(BaseStrategy):
                         ),
                         "metadata": self._build_valuation_metadata(valuation)
                     }
+                else:
+                    # 买入条件满足但资金不足
+                    required_cash = current_price * 100
+                    return {
+                        "action": "hold",
+                        "amount": 0,
+                        "reason": (
+                            f"资金不足: 达到买入条件(价格={current_price:.2f} <= 阈值={buy_threshold:.2f}), "
+                            f"但可用资金{cash:.2f}元不足以买入一手(需{required_cash:.2f}元)"
+                        ),
+                        "metadata": self._build_valuation_metadata(valuation)
+                    }
 
             elif current_price >= sell_threshold and position > 0:
                 # 价格高于卖出阈值，且有持仓 -> 卖出
@@ -389,32 +401,47 @@ class MDVAESStrategy(BaseStrategy):
                 }
         else:
             # 使用估值区间模式
-            if current_price < valuation.lower_bound and position == 0:
-                # 价格低于下限，且无持仓 -> 买入
+            buy_threshold = valuation.lower_bound * self.margin_buy
+            sell_threshold = valuation.upper_bound * self.margin_sell
+
+            if current_price <= buy_threshold and position == 0:
+                # 价格 <= 下限 × 买入阈值，且无持仓 -> 买入
                 buy_amount = int((cash * 0.9) / current_price / 100) * 100
                 if buy_amount > 0:
                     return {
                         "action": "buy",
                         "amount": buy_amount,
                         "reason": (
-                            f"估值买入: 内在价值={valuation.intrinsic_value:.2f}, "
-                            f"下限={valuation.lower_bound:.2f}, "
+                            f"估值买入: 下限={valuation.lower_bound:.2f}, "
+                            f"买入阈值={buy_threshold:.2f}, "
                             f"价格={current_price:.2f}, "
-                            f"低估={(valuation.lower_bound - current_price)/valuation.lower_bound*100:.1f}%"
+                            f"折扣={(1 - current_price/valuation.lower_bound)*100:.1f}%"
+                        ),
+                        "metadata": self._build_valuation_metadata(valuation)
+                    }
+                else:
+                    # 买入条件满足但资金不足
+                    required_cash = current_price * 100
+                    return {
+                        "action": "hold",
+                        "amount": 0,
+                        "reason": (
+                            f"资金不足: 达到买入条件(价格={current_price:.2f} <= 阈值={buy_threshold:.2f}), "
+                            f"但可用资金{cash:.2f}元不足以买入一手(需{required_cash:.2f}元)"
                         ),
                         "metadata": self._build_valuation_metadata(valuation)
                     }
 
-            elif current_price > valuation.upper_bound and position > 0:
-                # 价格高于上限，且有持仓 -> 卖出
+            elif current_price >= sell_threshold and position > 0:
+                # 价格 >= 上限 × 卖出阈值，且有持仓 -> 卖出
                 return {
                     "action": "sell",
                     "amount": position,
                     "reason": (
-                        f"估值卖出: 内在价值={valuation.intrinsic_value:.2f}, "
-                        f"上限={valuation.upper_bound:.2f}, "
+                        f"估值卖出: 上限={valuation.upper_bound:.2f}, "
+                        f"卖出阈值={sell_threshold:.2f}, "
                         f"价格={current_price:.2f}, "
-                        f"高估={(current_price - valuation.upper_bound)/valuation.upper_bound*100:.1f}%"
+                        f"溢价={(current_price/valuation.upper_bound - 1)*100:.1f}%"
                     ),
                     "metadata": self._build_valuation_metadata(valuation)
                 }

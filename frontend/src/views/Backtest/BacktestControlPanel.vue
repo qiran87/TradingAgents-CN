@@ -361,39 +361,55 @@
                 <div v-if="selectedStrategy.parameters && selectedStrategy.parameters.length > 0">
                   <h4 v-if="!selectedStrategy?.hasAnchorWeight">策略参数设置</h4>
                   <h4 v-else>其他策略参数</h4>
-                  <el-form label-width="120px">
+                  <el-form label-width="140px">
                     <el-form-item
                       v-for="param in selectedStrategy.parameters"
                       :key="param.name"
                       :label="param.label"
                     >
-                      <el-input-number
-                        v-if="param.type === 'number'"
-                        v-model="form.strategy_params[param.name]"
-                        :min="param.min"
-                        :max="param.max"
-                        :step="param.step"
-                        :precision="param.precision || 0"
-                      />
-                      <el-select
-                        v-else-if="param.type === 'select'"
-                        v-model="form.strategy_params[param.name]"
-                      >
-                        <el-option
-                          v-for="option in param.options"
-                          :key="option.value"
-                          :label="option.label"
-                          :value="option.value"
+                      <div class="param-input-wrapper">
+                        <!-- 数值类型参数 -->
+                        <el-input-number
+                          v-if="param.type === 'number'"
+                          v-model="form.strategy_params[param.name]"
+                          :min="param.min"
+                          :max="param.max"
+                          :step="param.step"
+                          :precision="param.precision || 0"
                         />
-                      </el-select>
-                      <el-button
-                        v-if="form.strategy_params[param.name] !== undefined"
-                        size="small"
-                        text
-                        @click="resetStrategyParam(param.name)"
-                      >
-                        重置
-                      </el-button>
+                        <!-- 选择类型参数 -->
+                        <el-select
+                          v-else-if="param.type === 'select'"
+                          v-model="form.strategy_params[param.name]"
+                        >
+                          <el-option
+                            v-for="option in param.options"
+                            :key="option.value"
+                            :label="option.label"
+                            :value="option.value"
+                          />
+                        </el-select>
+                        <!-- 布尔类型参数 -->
+                        <el-switch
+                          v-else-if="param.type === 'boolean'"
+                          v-model="form.strategy_params[param.name]"
+                          :active-text="param.activeText || '开启'"
+                          :inactive-text="param.inactiveText || '关闭'"
+                        />
+                        <!-- 重置按钮 -->
+                        <el-button
+                          v-if="form.strategy_params[param.name] !== undefined"
+                          size="small"
+                          text
+                          @click="resetStrategyParam(param.name)"
+                        >
+                          重置
+                        </el-button>
+                      </div>
+                      <!-- 参数说明 -->
+                      <div v-if="param.description" class="param-description">
+                        <el-text size="small" type="info">{{ param.description }}</el-text>
+                      </div>
                     </el-form-item>
                   </el-form>
                 </div>
@@ -766,7 +782,7 @@ const form = ref({
   stock_code: '000001.SZ',
   start_date: '',
   end_date: '',
-  initial_capital: 100000,
+  initial_capital: 200000,  // 提高默认初始资金以支持高价股（如茅台）
   min_purchase: 100,
   strategy_id: '',
   strategy_params: {},
@@ -837,10 +853,37 @@ const strategies = ref([
       { name: 'forecast_years', label: 'EPS预测年数', type: 'number', min: 1, max: 10, step: 1, default: 5, precision: 0 },
       { name: 'peg_base', label: 'PEG基数', type: 'number', min: 0.5, max: 2.0, step: 0.1, default: 1.0, precision: 2 },
       { name: 'risk_adjustment', label: '风险调整幅度', type: 'number', min: 0, max: 0.3, step: 0.01, default: 0.1, precision: 3 },
-      { name: 'rebalance_frequency', label: '重新估值频率(天)', type: 'number', min: 1, max: 365, step: 1, default: 30, precision: 0 },
-      { name: 'use_margin', label: '使用安全边际', type: 'boolean', default: true },
-      { name: 'margin_buy', label: '买入安全边际', type: 'number', min: 0.5, max: 1.03, step: 0.05, default: 0.8, precision: 3 },
-      { name: 'margin_sell', label: '卖出安全边际', type: 'number', min: 1.05, max: 2.0, step: 0.05, default: 1.2, precision: 3 }
+      { name: 'rebalance_frequency', label: '重新估值频率(天)', type: 'number', min: 1, max: 365, step: 1, default: 90, precision: 0 },
+      {
+        name: 'use_margin',
+        label: '交易模式',
+        type: 'boolean',
+        default: true,
+        activeText: '安全边际模式',
+        inactiveText: '估值区间模式'
+      },
+      {
+        name: 'margin_buy',
+        label: '买入阈值比例',
+        type: 'number',
+        min: 0.5,
+        max: 1.03,
+        step: 0.05,
+        default: 0.8,
+        precision: 3,
+        description: '安全边际模式：价格≤内在价值×此比例时买入（默认0.8）；估值区间模式：价格≤下限×此比例时买入（默认0.8即下限的8折）'
+      },
+      {
+        name: 'margin_sell',
+        label: '卖出阈值比例',
+        type: 'number',
+        min: 1.05,
+        max: 2.0,
+        step: 0.05,
+        default: 1.2,
+        precision: 3,
+        description: '安全边际模式：价格≥内在价值×此比例时卖出（默认1.2即溢价20%）；估值区间模式：价格≥上限×此比例时卖出（默认1.2即上限的1.2倍）'
+      }
     ],
     // 多锚点权重默认配置
     anchorWeightDefaults: {
@@ -1080,7 +1123,7 @@ function handleResetParams() {
     stock_code: '000001.SZ',
     start_date: '',
     end_date: '',
-    initial_capital: 100000,
+    initial_capital: 200000,  // 提高默认初始资金以支持高价股（如茅台）
     min_purchase: 100,
     strategy_id: '',
     strategy_params: {},
@@ -1475,6 +1518,18 @@ onUnmounted(() => {
         color: #909399;
         text-align: center;
         padding: 20px;
+      }
+
+      // 策略参数样式
+      .param-input-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .param-description {
+        margin-top: 4px;
+        line-height: 1.4;
       }
     }
 

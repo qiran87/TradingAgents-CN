@@ -183,6 +183,7 @@ def run_single_backtest(
     risk_adjustment: float,
     margin_buy: float,
     margin_sell: float,
+    use_margin: bool = True,
     peg_weight: float = None,
     pe_weight: float = None,
     pb_weight: float = None,
@@ -196,8 +197,16 @@ def run_single_backtest(
     print(f"EPS预测年数: {forecast_years}年")
     print(f"PEG基数: {peg_base}")
     print(f"风险调整幅度: {risk_adjustment}")
-    print(f"买入安全边际: {margin_buy} (价格低于估值的{margin_buy*100}%)")
-    print(f"卖出安全边际: {margin_sell} (价格高于估值的{margin_sell*100}%)")
+
+    # 显示交易模式
+    mode_name = "安全边际模式" if use_margin else "估值区间模式"
+    print(f"交易模式: {mode_name}")
+    if use_margin:
+        print(f"  买入阈值: 内在价值 × {margin_buy}")
+        print(f"  卖出阈值: 内在价值 × {margin_sell}")
+    else:
+        print(f"  买入阈值: 下限 × {margin_buy}")
+        print(f"  卖出阈值: 上限 × {margin_sell}")
 
     # 处理权重参数
     if peg_weight is not None or pe_weight is not None or pb_weight is not None or dcf_weight is not None:
@@ -675,12 +684,23 @@ def run_single_backtest(
         print("请手动输入当前价格用于计算交易信号:")
         current_price = float(input("当前价格 (元): "))
 
-    # 计算买入/卖出阈值
-    buy_threshold = adjusted_valuation * margin_buy
-    sell_threshold = adjusted_valuation * margin_sell
+    # 计算买入/卖出阈值（根据交易模式）
+    print_subsection("计算交易阈值")
 
-    print(f"\n买入阈值: 内在价值 × {margin_buy} = {adjusted_valuation:.2f} × {margin_buy} = {buy_threshold:.2f} 元")
-    print(f"卖出阈值: 内在价值 × {margin_sell} = {adjusted_valuation:.2f} × {margin_sell} = {sell_threshold:.2f} 元")
+    if use_margin:
+        # 安全边际模式：基于内在价值
+        buy_threshold = adjusted_valuation * margin_buy
+        sell_threshold = adjusted_valuation * margin_sell
+        print(f"模式: 安全边际模式")
+        print(f"买入阈值: 内在价值 × {margin_buy} = {adjusted_valuation:.2f} × {margin_buy} = {buy_threshold:.2f} 元")
+        print(f"卖出阈值: 内在价值 × {margin_sell} = {adjusted_valuation:.2f} × {margin_sell} = {sell_threshold:.2f} 元")
+    else:
+        # 估值区间模式：基于估值上下限
+        buy_threshold = lower_bound * margin_buy
+        sell_threshold = upper_bound * margin_sell
+        print(f"模式: 估值区间模式")
+        print(f"买入阈值: 下限 × {margin_buy} = {lower_bound:.2f} × {margin_buy} = {buy_threshold:.2f} 元")
+        print(f"卖出阈值: 上限 × {margin_sell} = {upper_bound:.2f} × {margin_sell} = {sell_threshold:.2f} 元")
 
     # 判断交易信号
     print_subsection("交易信号判断")
@@ -688,24 +708,43 @@ def run_single_backtest(
     if current_price <= buy_threshold:
         signal = "买入"
         signal_emoji = "🟢"
-        safety_margin = (1 - current_price / adjusted_valuation) * 100
-        reason = f"当前价格低于买入阈值，安全边际 {safety_margin:.1f}%"
+        if use_margin:
+            safety_margin = (1 - current_price / adjusted_valuation) * 100
+            reason = f"当前价格低于买入阈值，安全边际 {safety_margin:.1f}%"
+        else:
+            discount = (1 - current_price / lower_bound) * 100
+            reason = f"当前价格低于买入阈值，折扣 {discount:.1f}%"
     elif current_price >= sell_threshold:
         signal = "卖出"
         signal_emoji = "🔴"
-        overvalued = (current_price / adjusted_valuation - 1) * 100
-        reason = f"当前价格高于卖出阈值，高估 {overvalued:.1f}%"
+        if use_margin:
+            overvalued = (current_price / adjusted_valuation - 1) * 100
+            reason = f"当前价格高于卖出阈值，高估 {overvalued:.1f}%"
+        else:
+            premium = (current_price / upper_bound - 1) * 100
+            reason = f"当前价格高于卖出阈值，溢价 {premium:.1f}%"
     else:
         signal = "持有"
         signal_emoji = "🟡"
-        if current_price < adjusted_valuation:
-            discount = (adjusted_valuation - current_price) / adjusted_valuation * 100
-            reason = f"当前价格低于内在价值 {discount:.1f}%，但未达到买入阈值"
-        elif current_price > adjusted_valuation:
-            premium = (current_price / adjusted_valuation - 1) * 100
-            reason = f"当前价格高于内在价值 {premium:.1f}%，但未达到卖出阈值"
+        if use_margin:
+            if current_price < adjusted_valuation:
+                discount = (adjusted_valuation - current_price) / adjusted_valuation * 100
+                reason = f"当前价格低于内在价值 {discount:.1f}%，但未达到买入阈值"
+            elif current_price > adjusted_valuation:
+                premium = (current_price / adjusted_valuation - 1) * 100
+                reason = f"当前价格高于内在价值 {premium:.1f}%，但未达到卖出阈值"
+            else:
+                reason = f"当前价格接近内在价值"
         else:
-            reason = f"当前价格接近内在价值"
+            # 估值区间模式下的持有判断
+            if current_price < lower_bound:
+                discount = (lower_bound - current_price) / lower_bound * 100
+                reason = f"当前价格低于下限 {discount:.1f}%，但未达到买入阈值"
+            elif current_price > upper_bound:
+                premium = (current_price / upper_bound - 1) * 100
+                reason = f"当前价格高于上限 {premium:.1f}%，但未达到卖出阈值"
+            else:
+                reason = f"当前价格在估值区间内"
 
     print(f"\n{signal_emoji} 交易信号: {signal}")
     print(f"决策理由: {reason}")
@@ -762,16 +801,24 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-    # 基本用法（使用默认权重）
+    # 基本用法（使用默认权重和安全边际模式）
     python scripts/test_mdvaes_single_backtest.py 600941.SS 2024-01-02
     python scripts/test_mdvaes_single_backtest.py 000001.SZ 2024-06-15 --forecast-years 3 --peg-base 0.8
 
     # 自定义安全边际
     python scripts/test_mdvaes_single_backtest.py 600519.SH 2024-01-02 --margin-buy 0.7 --margin-sell 1.3
 
+    # 使用估值区间模式（基于估值上下限计算阈值）
+    python scripts/test_mdvaes_single_backtest.py 600519.SH 2024-01-02 --use-valuation-range
+    python scripts/test_mdvaes_single_backtest.py 600519.SH 2024-01-02 --use-valuation-range --margin-buy 0.75 --margin-sell 1.25
+
     # 自定义多锚点权重（必须同时指定四个权重，总和为1.0）
     python scripts/test_mdvaes_single_backtest.py 000001.SZ 2024-06-15 --peg-weight 0.5 --pe-weight 0.2 --pb-weight 0.15 --dcf-weight 0.15
     python scripts/test_mdvaes_single_backtest.py 600519.SH 2024-01-02 --peg-weight 0.3 --pe-weight 0.3 --pb-weight 0.2 --dcf-weight 0.2 --margin-buy 0.75
+
+    # 交易模式说明:
+    #   - 安全边际模式 (默认): 买入阈值 = 内在价值 × margin_buy, 卖出阈值 = 内在价值 × margin_sell
+    #   - 估值区间模式: 买入阈值 = 下限 × margin_buy, 卖出阈值 = 上限 × margin_sell
 
     # 默认权重配置: PEG=40%%, PE=30%%, PB=15%%, DCF=15%%
         """
@@ -786,9 +833,13 @@ def main():
     parser.add_argument("--risk-adjustment", type=float, default=0.1,
                         help="风险调整幅度 (默认: 0.1)")
     parser.add_argument("--margin-buy", type=float, default=0.8,
-                        help="买入安全边际 (默认: 0.8, 即价格低于估值80%%时买入)")
+                        help="买入阈值比例 (安全边际模式: 内在价值×此比例=买入阈值; 估值区间模式: 下限×此比例=买入阈值)")
     parser.add_argument("--margin-sell", type=float, default=1.2,
-                        help="卖出安全边际 (默认: 1.2, 即价格高于估值120%%时卖出)")
+                        help="卖出阈值比例 (安全边际模式: 内在价值×此比例=卖出阈值; 估值区间模式: 上限×此比例=卖出阈值)")
+    parser.add_argument("--use-margin", action="store_true", default=True,
+                        help="使用安全边际模式 (默认: True, 即基于内在价值计算阈值)")
+    parser.add_argument("--use-valuation-range", action="store_true", default=False,
+                        help="使用估值区间模式 (即基于估值上下限计算阈值)")
 
     # 多锚点权重参数
     parser.add_argument("--peg-weight", type=float, default=None,
@@ -855,6 +906,9 @@ def main():
 
     # 运行回测
     try:
+        # 确定 use_margin 参数（如果指定了 --use-valuation-range，则 use_margin=False）
+        use_margin = not args.use_valuation_range
+
         run_single_backtest(
             symbol=args.symbol,
             calculation_date=args.date,
@@ -863,6 +917,7 @@ def main():
             risk_adjustment=args.risk_adjustment,
             margin_buy=args.margin_buy,
             margin_sell=args.margin_sell,
+            use_margin=use_margin,
             peg_weight=args.peg_weight,
             pe_weight=args.pe_weight,
             pb_weight=args.pb_weight,

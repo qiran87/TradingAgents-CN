@@ -784,6 +784,11 @@ class BacktestEngine:
             "created_at": datetime.now(timezone.utc)
         }
 
+        # 保存交易信号
+        if signal:
+            daily_state_doc["action"] = signal.get("action")
+            daily_state_doc["reason"] = signal.get("reason")
+
         # 如果策略返回了估值元数据，保存到每日状态
         if signal and "metadata" in signal:
             metadata = signal["metadata"]
