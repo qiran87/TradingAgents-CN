@@ -151,10 +151,10 @@ class Settings(BaseSettings):
 
     # 基础信息同步任务配置（可配置调度）
     SYNC_STOCK_BASICS_ENABLED: bool = Field(default=True)
-    # 优先使用 CRON 表达式，例如 "30 6 * * *" 表示每日 06:30
+    # 优先使用 CRON 表达式，例如 "30 5 * * *" 表示每日 05:30
     SYNC_STOCK_BASICS_CRON: str = Field(default="")
     # 若未提供 CRON，则使用简单时间字符串 "HH:MM"（24小时制）
-    SYNC_STOCK_BASICS_TIME: str = Field(default="06:30")
+    SYNC_STOCK_BASICS_TIME: str = Field(default="05:30")
     # 时区
     TIMEZONE: str = Field(default="Asia/Shanghai")
 
@@ -191,13 +191,13 @@ class Settings(BaseSettings):
     # Tushare统一数据同步配置
     TUSHARE_UNIFIED_ENABLED: bool = Field(default=True)
     TUSHARE_BASIC_INFO_SYNC_ENABLED: bool = Field(default=True)
-    TUSHARE_BASIC_INFO_SYNC_CRON: str = Field(default="0 2 * * *")  # 每日凌晨2点
+    TUSHARE_BASIC_INFO_SYNC_CRON: str = Field(default="0 1 * * *")  # 每日凌晨1点
     TUSHARE_QUOTES_SYNC_ENABLED: bool = Field(default=True)
     TUSHARE_QUOTES_SYNC_CRON: str = Field(default="*/5 9-15 * * 1-5")  # 交易时间每5分钟
     TUSHARE_HISTORICAL_SYNC_ENABLED: bool = Field(default=True)
-    TUSHARE_HISTORICAL_SYNC_CRON: str = Field(default="0 16 * * 1-5")  # 工作日16点
+    TUSHARE_HISTORICAL_SYNC_CRON: str = Field(default="0 17 * * 1-5")  # 工作日16点
     TUSHARE_FINANCIAL_SYNC_ENABLED: bool = Field(default=True)
-    TUSHARE_FINANCIAL_SYNC_CRON: str = Field(default="0 3 * * 0")  # 周日凌晨3点
+    TUSHARE_FINANCIAL_SYNC_CRON: str = Field(default="0 2 * * 0")  # 周日凌晨2点
     TUSHARE_STATUS_CHECK_ENABLED: bool = Field(default=True)
     TUSHARE_STATUS_CHECK_CRON: str = Field(default="0 * * * *")  # 每小时
 
@@ -278,9 +278,9 @@ class Settings(BaseSettings):
 
     # ===== MDVAES 估值数据同步服务配置 =====
     MDVAES_SYNC_ENABLED: bool = Field(default=True)
-    MDVAES_SYNC_CRON: str = Field(default="30 16 * * 1-5")  # 交易日下午16:30（周一到周五）
+    MDVAES_SYNC_CRON: str = Field(default="30 16 * * 1-5")  # 交易日下午17:30（周一到周五）
     MDVAES_STATUS_CHECK_ENABLED: bool = Field(default=True)
-    MDVAES_STATUS_CHECK_CRON: str = Field(default="0 8 * * *")  # 每天早上8点检查
+    MDVAES_STATUS_CHECK_CRON: str = Field(default="0 7 * * *")  # 每天早上7点检查
 
     @property
     def is_production(self) -> bool:
