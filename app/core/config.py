@@ -195,7 +195,7 @@ class Settings(BaseSettings):
     TUSHARE_QUOTES_SYNC_ENABLED: bool = Field(default=True)
     TUSHARE_QUOTES_SYNC_CRON: str = Field(default="*/5 9-15 * * 1-5")  # 交易时间每5分钟
     TUSHARE_HISTORICAL_SYNC_ENABLED: bool = Field(default=True)
-    TUSHARE_HISTORICAL_SYNC_CRON: str = Field(default="0 17 * * 1-5")  # 工作日16点
+    TUSHARE_HISTORICAL_SYNC_CRON: str = Field(default="0 17 * * 1-5")  # 工作日17点
     TUSHARE_FINANCIAL_SYNC_ENABLED: bool = Field(default=True)
     TUSHARE_FINANCIAL_SYNC_CRON: str = Field(default="0 2 * * 0")  # 周日凌晨2点
     TUSHARE_STATUS_CHECK_ENABLED: bool = Field(default=True)
@@ -239,7 +239,7 @@ class Settings(BaseSettings):
     BAOSTOCK_BASIC_INFO_SYNC_ENABLED: bool = Field(default=True, description="启用基础信息同步")
     BAOSTOCK_BASIC_INFO_SYNC_CRON: str = Field(default="0 4 * * *", description="基础信息同步CRON表达式")  # 每日凌晨4点
     BAOSTOCK_DAILY_QUOTES_SYNC_ENABLED: bool = Field(default=True, description="启用日K线同步（注意：BaoStock不支持实时行情）")
-    BAOSTOCK_DAILY_QUOTES_SYNC_CRON: str = Field(default="0 16 * * 1-5", description="日K线同步CRON表达式")  # 工作日收盘后16:00
+    BAOSTOCK_DAILY_QUOTES_SYNC_CRON: str = Field(default="0 17 * * 1-5", description="日K线同步CRON表达式")  # 工作日收盘后17:00
     BAOSTOCK_HISTORICAL_SYNC_ENABLED: bool = Field(default=True, description="启用历史数据同步")
     BAOSTOCK_HISTORICAL_SYNC_CRON: str = Field(default="0 18 * * 1-5", description="历史数据同步CRON表达式")  # 工作日18点
     BAOSTOCK_STATUS_CHECK_ENABLED: bool = Field(default=True, description="启用状态检查")
@@ -278,7 +278,7 @@ class Settings(BaseSettings):
 
     # ===== MDVAES 估值数据同步服务配置 =====
     MDVAES_SYNC_ENABLED: bool = Field(default=True)
-    MDVAES_SYNC_CRON: str = Field(default="30 16 * * 1-5")  # 交易日下午17:30（周一到周五）
+    MDVAES_SYNC_CRON: str = Field(default="30 17 * * 1-5")  # 交易日下午17:30（周一到周五）
     MDVAES_STATUS_CHECK_ENABLED: bool = Field(default=True)
     MDVAES_STATUS_CHECK_CRON: str = Field(default="0 7 * * *")  # 每天早上7点检查
 

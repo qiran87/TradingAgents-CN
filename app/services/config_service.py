@@ -538,6 +538,10 @@ class ConfigService:
             if '_id' in config_dict:
                 del config_dict['_id']  # 移除旧的_id，让MongoDB生成新的
 
+            # 🔥 修复：显式设置 is_active=True，确保新配置是激活状态
+            config_dict['is_active'] = True
+            print(f"🔥 显式设置 is_active=True")
+
             # 打印即将保存的 system_settings
             system_settings = config_dict.get('system_settings', {})
             print(f"📝 即将保存的 system_settings 包含 {len(system_settings)} 项")

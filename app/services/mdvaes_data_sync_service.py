@@ -88,11 +88,67 @@ class MDVAESDataSyncService:
     }
 
     def __init__(self):
-        self.pro = ts.pro_api(settings.TUSHARE_TOKEN)
+        # 🔥 修复：动态获取 Tushare Token，优先使用数据库配置
+        self._pro = None  # 延迟初始化
         # 为每个接口创建独立的限流器
         self._limiters = {}
         for api_name, (max_calls, window) in self.RATE_LIMITS.items():
             self._limiters[api_name] = RateLimiter(max_calls, window)
+
+    @property
+    def pro(self):
+        """动态获取 Tushare API 客户端，确保使用最新的 token"""
+        if self._pro is None:
+            # 🔥 优先级：数据库配置 > 环境变量
+            token = self._get_tushare_token()
+            self._pro = ts.pro_api(token)
+            logger.info(f"📌 初始化 Tushare API 客户端 (token长度: {len(token)})")
+        return self._pro
+
+    def _get_tushare_token(self) -> str:
+        """
+        获取 Tushare Token
+
+        优先级：
+        1. 数据库配置（system_configs 集合中的 tushare 数据源配置）
+        2. 环境变量（.env 文件中的 TUSHARE_TOKEN）
+        """
+        import os
+        from pymongo import MongoClient
+        from app.core.config import settings
+
+        # 1. 尝试从数据库获取
+        try:
+            client = MongoClient(settings.mongodb_url)
+            db = client[settings.mongodb_database]
+            config_collection = db.system_configs
+
+            # 查找激活的配置
+            config = config_collection.find_one({"is_active": True})
+            if config:
+                # 查找 tushare 数据源配置
+                for ds in config.get("data_source_configs", []):
+                    if ds.get("type") == "tushare" or ds.get("type") == "tushare":
+                        api_key = ds.get("api_key", "")
+                        # 验证 token 有效性
+                        if api_key and not api_key.startswith("your_") and len(api_key) > 10:
+                            logger.info(f"✅ 使用数据库中的 Tushare Token (长度: {len(api_key)})")
+                            client.close()
+                            return api_key
+                        else:
+                            logger.debug(f"⏭️  数据库中 Tushare Token 无效，尝试环境变量")
+            client.close()
+        except Exception as e:
+            logger.warning(f"⚠️  从数据库获取 Tushare Token 失败: {e}")
+
+        # 2. 降级到环境变量
+        env_token = os.getenv("TUSHARE_TOKEN", "")
+        if env_token and not env_token.startswith("your_"):
+            logger.info(f"✅ 使用环境变量中的 Tushare Token (长度: {len(env_token)})")
+            return env_token
+
+        # 3. 都没有，抛出异常
+        raise ValueError("Tushare Token 未配置！请在数据源配置中设置有效的 API Key")
 
     def _log_retry_attempt(self, retry_state):
         """记录重试尝试"""

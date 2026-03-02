@@ -126,7 +126,7 @@ docker exec ${MONGO_CONTAINER} mongorestore \
     --uri="mongodb://${MONGO_USERNAME}:${MONGO_PASSWORD}@localhost:27017/${MONGO_DATABASE}?authSource=admin" \
     --nsInclude="${MONGO_DATABASE}.*" \
     --gzip \
-    /tmp/dump
+    /tmp/dump/tradingagents
 
 # 清理容器内的临时文件
 log_info "清理容器内临时文件..."
